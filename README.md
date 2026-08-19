@@ -1,70 +1,89 @@
 # camtrap
 
-Камера-ловушка на ноутбуке для гостиничного номера: детекция движения через встроенную
-вебкамеру, снимки раз в ~5 с пока движение есть, немедленная выгрузка наружу и алерт с фото
-в Telegram.
+A camera trap running on a laptop, for a hotel room you have to leave your things in.
 
-Регистратор, а не замок: кражу не предотвращает, но даёт снимок вошедшего с меткой времени
-и точную отсечку момента, когда ноутбук унесли или выключили.
+**The siren is the point.** When the laptop is picked up — power cable pulled, lid closed, case
+lifted — it sounds a police siren at full volume out of its own speakers, and that sound cannot
+be silenced from the keyboard. Carrying a screaming laptop out of a hotel room is not something
+people go through with. The camera side documents what happened; the siren changes what happens.
 
-Одно активное действие всё же есть. Когда ноутбук **берут в руки** — выдернули зарядку,
-закрыли крышку, подняли корпус — он играет в спикеры запись о том, что съёмка идёт и кадры
-уже отправлены владельцу, и присылает отдельный алерт 🚨. Решение о звуке принимается
-локально, без сети: реакция, опоздавшая на две минуты, никому не нужна.
+Alongside that it works as a recorder: motion detection through the built-in webcam, a snapshot
+every ~5 s while motion lasts, immediate off-box upload, and a Telegram alert with the photo and
+an exact timestamp — the kind of evidence that turns "I think something is missing" into a
+concrete conversation with hotel management and a usable police report.
 
-**Статус: спецификация, кода пока нет.** Всё содержательное — в [SPEC.md](SPEC.md);
-модель угроз и данные, из которых выросли требования — в
+It is not a lock. It does not record video, never records audio, recognises no faces, and keeps
+no database of people.
+
+**Status: specification, no code yet.** Everything substantive is in [SPEC.md](SPEC.md); the
+hotel-theft data the requirements grew from is in
 [docs/threat-model.md](docs/threat-model.md).
 
-## Устройство в двух словах
+## How it fits together
 
 ```
-ноутбук ──ssh forced-cmd──▶ VPS ◀──cron──── Pi (дома) ──▶ Telegram
-   │      кадры, heartbeat   inbox, state    токен только здесь
-   ├──cp──▶ ~/MEGA/camtrap  (резервный приёмник, без алертов)
-   └──питание / крышка / сдвиг кадра ──▶ 🔊 запись в спикеры (локально, без сети)
+laptop ──ssh forced-cmd──▶ VPS ◀──cron──── Pi at home ──▶ Telegram
+   │     frames, heartbeat  inbox, state   token lives only here
+   ├──cp──▶ ~/MEGA/camtrap  (backup receiver, no alerts)
+   └──power / lid / frame shift ──▶ 🔊 siren (local, no network involved)
 ```
 
-Три решения, из которых следует всё остальное:
+Four decisions everything else follows from:
 
-- **Диск ноутбука считается доставшимся вору.** Отсюда ключ на VPS — write-only forced
-  command, а токена Telegram на ноутбуке нет вовсе: он живёт только на домашнем Pi, который
-  сам опрашивает VPS и сам отправляет.
-- **Кадр удаляется локально только после подтверждения приёма.** Копия в облаке
-  подтверждением не считается: успешный `cp` в папку синхронизации не значит, что файл
-  доехал.
-- **Ложная тревога дороже пропущенной.** Прогрев, маска игнора, подавление смены освещения,
-  окно после разблокировки сессии — всё затем, чтобы за сутки в пустом номере не пришло ни
-  одного алерта. Тревогам на самопроходящее перестают верить, и тогда ловушка бесполезна.
+- **The siren is decided locally.** No inbound channel to the laptop, no waiting on a poll: a
+  reaction two minutes late is worthless. This is the only part that still works when
+  connectivity is completely dead.
+- **Evidence first, noise second.** The first frame of a tamper event jumps the upload queue, and
+  the siren starts once delivery is acknowledged — or after 3 seconds, whichever comes first.
+- **The laptop's disk is assumed to be in the thief's hands.** Hence a write-only forced-command
+  key to the VPS, and no Telegram token on the laptop at all: it lives only on a Raspberry Pi at
+  home, which polls the VPS and does the sending.
+- **A false siren is worse than a missed one.** Warm-up, an ignore mask, lighting-change
+  suppression, a grace window after a session unlock: an alarm that goes off on its own teaches
+  you to ignore it, and then the trap is worthless.
 
-## Что ловит «взяли в руки»
+## Keeping the siren on
 
-Акселерометра у целевой машины нет, поэтому сигнал композитный: выдернутое питание
-(`/sys/class/power_supply/*/online`), закрытая крышка (`/proc/acpi/button/lid/*/state`),
-глобальный сдвиг сцены между кадрами (`cv2.phaseCorrelate`) и отвал камеры. Датчик
-освещённости работает арбитром: он отличает «включили свет» от «подняли корпус» — оба случая
-меняют почти весь кадр. Подробности и разбор внешнего USB-акселерометра — в
-[SPEC.md §3.3](SPEC.md).
+A siren a mute key can silence is not a siren. On the target machine mute, volume and power keys
+all come from the same built-in keyboard as the letters, so grabbing "just the media keys" is
+impossible — and grabbing the whole keyboard would lock the owner out of typing their own unlock
+password. So instead: the audio path is re-asserted every 250 ms while the siren plays (unmute,
+volume, `Speaker` profile, auto-mute off), the session is locked so the keyboard cannot reach the
+process, and inhibitors keep a power-key press or a closed lid from stopping the machine.
+Details, including what stays possible in hardware, are in [SPEC.md §3.4](SPEC.md).
 
-## Требования
+## What detects "picked up"
 
-Linux с systemd (`--user` юнит), Python 3.12, `opencv-python-headless`, PipeWire для звука,
-V4L2-камера, ssh-доступ на приёмник. Из системных утилит — `pw-play`, `pactl`, а для сборки
-записи-предупреждения `espeak-ng` и `ffmpeg`.
+The target machine has no accelerometer, so the signal is composite: power cable
+(`/sys/class/power_supply/*/online`), lid (`/proc/acpi/button/lid/*/state`), global scene shift
+between frames (`cv2.phaseCorrelate`), and camera disappearance. The ambient light sensor acts as
+an arbiter between "the light was switched on" and "the case was lifted" — both change nearly the
+whole frame. External USB accelerometers are discussed in [SPEC.md §3.3](SPEC.md).
 
-## Дисциплина репозитория
+## Requirements
 
-Источник правды — репозиторий; на боксы всё попадает только через `deploy/`, руками на боксах
-не правим. Конкретика развёртывания — адреса боксов, имена ключей, даты — в репозиторий не
-попадает: спека написана обезличенно (`user@vps`, `Pi (дома)`).
+Linux with systemd (a `--user` unit), Python 3.12, `opencv-python-headless`, PipeWire for audio,
+a V4L2 camera, and ssh access to a receiver. System tools: `pw-play`, `pactl`, `loginctl`,
+`systemd-inhibit`, plus `ffmpeg` to generate the siren.
 
-## Правовая рамка
+```sh
+tools/make-siren.sh --mode yelp    # writes ~/.local/share/camtrap/sounds/siren.ogg
+```
 
-Съёмка собственного оплаченного номера ради сохранности вещей допустима, но кадры с людьми —
-материал для полиции и менеджмента отеля, а не для публикации; во многих юрисдикциях
-действует право на изображение. Маска игнора существует в том числе затем, чтобы исключить
-из кадра лишнее. Звук проекта только играет — микрофон не пишется никогда.
+## Repository discipline
 
-## Лицензия
+The repository is the source of truth; everything reaches the boxes through `deploy/` only, and
+nothing is edited by hand on a box. Deployment specifics — box addresses, key names, dates — are
+deliberately not in here: the spec is written impersonally (`user@vps`, `Pi at home`).
+
+## Legal frame
+
+Filming your own paid hotel room to protect your belongings is generally permissible, but frames
+with people in them are material for the police and hotel management, not for publication — many
+jurisdictions grant a right to one's own image. An alarm sound is the same category as a car
+alarm; it must never impersonate an authority, which is why the siren carries no voice claiming
+to be the police.
+
+## License
 
 [MIT](LICENSE).
