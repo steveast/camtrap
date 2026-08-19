@@ -2,7 +2,8 @@
 
 A camera trap running on a laptop: motion detection through the built-in webcam, a snapshot
 every ~5 s while motion lasts, immediate off-box upload, and a Telegram alert with the photo.
-When the laptop itself is picked up, it sounds a police siren.
+Sound escalates in two stages — a spoken warning in the local language when someone is in the
+room, a police siren when the laptop itself is picked up.
 
 Status: draft specification, no code yet. Date: 2026-08-19.
 
@@ -28,21 +29,27 @@ into a concrete conversation.
 
 ### What this project does NOT do
 
-- It does not prevent theft. This is a recorder, not a lock. The one active thing it does is
-  sound a siren when the laptop is picked up — that does not stop anyone from walking out with
-  it, it only makes walking out loud.
+- It does not prevent theft. This is a recorder, not a lock. What it does actively is make noise:
+  a spoken warning when someone is in the room, a siren when the laptop is picked up. Neither
+  stops anyone from walking out with it; they only make walking out loud.
 - It does not record video and it does not record audio. It plays sound; it never captures it.
 - It does not recognise faces and keeps no database of people.
 - It is not a "find my laptop" service — geolocation is handled by separately installed
   software.
 
-### The siren is the primary feature
+### Sound is the primary feature
 
 This is the owner's ranking, and the build order follows it: a loud siren is what makes carrying
 the laptop out of the room — let alone out of the hotel — a thing nobody wants to attempt. Frames
-document what happened; the siren is the only part that changes what happens. It therefore gets
+document what happened; sound is the only part that changes what happens. It therefore gets
 the strictest requirements in this document: it must be audible, it must not be silenceable from
 the keyboard, and it must never fire when the owner is the one holding the laptop.
+
+Sound escalates rather than firing at one level for everything. Someone who has just walked in
+gets a spoken notice in the local language — the room is watched, that is all. Someone who has
+picked the laptop up gets the siren. The order matters in both directions: the voice ends most
+visits without an incident, and keeping the siren for the case that deserves it is what keeps
+the siren believable.
 
 What it does not do, stated plainly so that nobody is surprised later: a siren does not make
 removal physically impossible. A laptop can be muffled under a pillow — built-in speakers are
@@ -57,16 +64,20 @@ needs both hands on a screaming laptop in a hotel corridor is a thief with a pro
 1. The lid is closed or the power cable is pulled → the siren sounds within 3 s, at full volume,
    and cannot be silenced from the keyboard; a separate 🚨 "the laptop is being handled" alert
    goes out, not mixed in with ordinary motion.
-2. A person enters the room → a photo arrives in Telegram within 6 minutes.
-3. The laptop is taken away or shut down → a "the agent went silent" alert arrives with an
+2. Someone is in the room → the spoken warning plays in the local language, then in English,
+   within 3 s of the motion being confirmed.
+3. A person enters the room → a photo arrives in Telegram within 6 minutes.
+4. The laptop is taken away or shut down → a "the agent went silent" alert arrives with an
    exact cut-off time.
-4. No frame of an event is lost to a Wi-Fi outage: it is delivered as soon as the link is back.
-5. False alerts over a full day in an empty room: zero — and zero sirens above all.
+5. No frame of an event is lost to a Wi-Fi outage: it is delivered as soon as the link is back.
+6. Over a full day in an **empty** room: zero alerts, zero warnings, zero sirens.
 
-The last criterion carries the same weight as the rest: nobody keeps trusting alarms that clear
-up on their own, and at that point the whole thing is pointless. With sound the cost of a false
-positive is higher than with an alert — a message in a private chat is seen only by the owner,
-while a siren in an empty room is heard down the corridor and brings hotel staff in.
+Criterion 6 carries the same weight as the rest: nobody keeps trusting alarms that clear up on
+their own, and at that point the whole thing is pointless. Note what it does and does not say —
+an empty room must stay silent, but a room with a cleaner in it is *supposed* to produce a spoken
+warning. That is the design, not a defect. What must never happen is the siren firing at a
+cleaner: the voice is a notice, the siren is an accusation, and mixing them up costs the trust
+the whole system runs on.
 
 ---
 
@@ -195,7 +206,8 @@ and the siren does not depend on the network at all.
 
 An event is a series of frames from one intrusion. Its type is `motion` (movement in frame),
 `light` (lighting change) or `tamper` (the laptop is being handled, see 3.3). The type decides
-queue priority, the shape of the alert, and whether the siren plays; everything else is shared.
+queue priority, the shape of the alert, and which sound plays — `motion` triggers the spoken
+warning, `tamper` the siren, `light` nothing by default (3.4). Everything else is shared.
 
 - First frame immediately, then one every `SNAPSHOT_INTERVAL = 5 s` while motion holds.
 - **Pre-buffer**: a ring buffer of `PREBUFFER_FRAMES = 5` frames (1/s) kept from before the
@@ -271,11 +283,54 @@ audible response. The list of signals that fired goes into the manifest: "cable 
 "case lifted" are different stories, and they will have to be reconstructed from the manifest
 rather than from memory.
 
-### 3.4 Audible response: the siren (laptop)
+### 3.4 Audible response: warning, then siren (laptop)
 
-It plays **only on `tamper`**, never on `motion` or `light`. A cleaner who came in to wipe the
-desk must not set off a siren: an hour later hotel security is in the room, and trust in the
-trap ends at the first false positive.
+Sound comes in **two stages**, and the difference between them is the whole design:
+
+| Stage | Trigger | Sound | Volume | Extra measures |
+|---|---|---|---|---|
+| 1 — warning | `motion` (someone is in the room) | spoken notice, in the local language then English | `WARN_VOLUME_PCT = 85` | none |
+| 2 — alarm | `tamper` (the laptop is being handled) | two-tone police siren | `SOUND_VOLUME_PCT = 100` | session lock, input hold |
+
+**Why two stages rather than one.** They address different moments. Someone who has just walked
+in has not touched anything yet, and the cheapest way to end the visit is to tell them the room
+is watched — a voice does that, in words they understand, without turning the corridor into an
+incident. Someone who has already picked the laptop up is past persuasion, and there the siren
+earns its keep. Escalating in that order also means the loud option stays credible: a siren that
+fires at every cleaner is a siren nobody believes by day three.
+
+**Stage 1 — the spoken warning.**
+
+- Text: *"Attention. This laptop is protected by an alarm and a camera."* Nothing more — no
+  threats, no claims about the police, no mention of frames having already been sent. It states a
+  fact and lets the person draw their own conclusion.
+- **Language follows the country**, set as an ordered list in the config —
+  `WARN_LANGS = ["vi", "en"]` for Vietnam, `["th", "en"]` for Thailand. Files are played in
+  order, local language first, English second, because English alone is a coin flip with hotel
+  housekeeping. `camtrap warn-make --lang <code>` builds each file; `camtrap setup` suggests a
+  default from the system time zone (`Asia/Ho_Chi_Minh` → `vi`, `Asia/Bangkok` → `th`) but never
+  decides on its own — a wrong guess here means a warning nobody in the room understands.
+- Generated by `tools/make-warning.sh` from `assets/voice/warn-<lang>.txt` through `espeak-ng`
+  plus `ffmpeg`. Verified available on the target machine: `vi` (Northern), `vi-vn-x-central`,
+  `vi-vn-x-south` and `th`; sample renders are 4.3 s for Vietnamese and 8.4 s for Thai.
+- **The quality caveat has to be stated.** `espeak-ng` is a formant synthesiser, and Vietnamese
+  and Thai are tonal: wrong tones can turn a sentence into noise for a native listener. The
+  phoneme output shows tone marks being applied, but nobody in this project can judge
+  intelligibility by ear. So before the trip each file is either checked by a native speaker or
+  replaced with a better recording — a neural TTS (`piper` with a `vi`/`th` voice, not installed
+  here yet) or a one-off render from an online service. This does not weaken the offline
+  guarantee: the file is prepared once at home, and in the room only a local `.ogg` is played.
+  A warning that cannot be understood is decoration.
+- Limits: one warning per event, `WARN_COOLDOWN_SEC = 120`, `WARN_MAX_PER_HOUR = 10`.
+- **Stage 1 takes no hostile measures**: no session lock, no input grab, no forced power
+  inhibition beyond what `camtrap run` already holds. It is a notice, not a confrontation.
+- **Expect it to fire during housekeeping, every single day.** That is correct behaviour, not a
+  false positive: someone is in the room. What it means in practice is that hotel staff will hear
+  a voice from the laptop while cleaning, and the front desk may ask about it — an ordinary
+  conversation about a travel alarm, but one to be ready for rather than surprised by. A "do not
+  disturb" sign for the days the room is left armed removes most of it.
+
+**Stage 2 — the siren.** Fires on `tamper` only, never on `motion` or `light`.
 
 - **The sound is a two-tone police siren**, generated locally by `tools/make-siren.sh` through
   `ffmpeg` — nothing is downloaded. Two modes: `yelp`, a fast alternation of 700 and 1100 Hz
@@ -283,11 +338,8 @@ trap ends at the first false positive.
   machine: 6 s, ~20 KB, Vorbis 48 kHz. The file lives at
   `~/.local/share/camtrap/sounds/siren.ogg`, path in the config, and any other recording can be
   dropped in instead — the player does not care where the audio came from.
-- **Why a siren rather than a spoken warning.** A voice saying "you are being photographed"
-  removes the sense of impunity, but it also tells the intruder that evidence exists and gives
-  them a reason to take the laptop or smash it. A siren is understood instantly, in any
-  language, as an alarm — and it says nothing about frames having already left. That is the
-  owner's decision; the residual risk is in the open questions.
+- If a `tamper` signal arrives while a stage 1 warning is still playing, the warning is cut off
+  mid-sentence and the siren takes over. The queue never delays the alarm.
 - **The sink is set explicitly** — `SOUND_SINK` in the config, by default the built-in speakers
   of the internal audio card (`Speaker` port of its `HiFi` profile). "Play to the default sink"
   is a bug: on the target machine the default is currently a USB audio dongle and the card's
@@ -298,16 +350,23 @@ trap ends at the first false positive.
 - **The player** is an external `pw-play` with a timeout; no audio bindings are added to the
   dependencies. Everything the agent does with sound can be reproduced by hand from a shell —
   that is what makes it fixable in a hotel room.
-- **Limits**: `SOUND_DELAY_MAX_SEC = 3` (how long to wait for the first frame to be
-  acknowledged before playing without it), `SIREN_SEC = 6` per burst,
-  `SOUND_COOLDOWN_SEC = 60`, `SOUND_MAX_PER_EVENT = 3`, `SOUND_MAX_PER_HOUR = 10`. During
-  warm-up, in `paused` mode, and inside the window after a session unlock (3.8) it does not
-  play at all.
-- **Audio readiness is checked up front and continuously**: `camtrap siren-test` plays the file
-  on the real speakers, and the heartbeat carries a `sound_ok` field (sink present, mute
-  cleared, file in place). A trap that silently cannot make noise is no better than no trap.
-- Whether it played goes into the manifest (`sound_played`, latency from the signal, whether it
-  played before the frame was acknowledged) and into the Telegram caption.
+- **Siren limits**: `SIREN_SEC = 6` per burst, `SOUND_COOLDOWN_SEC = 60`,
+  `SOUND_MAX_PER_EVENT = 3`, `SOUND_MAX_PER_HOUR = 10`.
+
+**Rules that apply to both stages.**
+
+- `SOUND_DELAY_MAX_SEC = 3` — how long to wait for the event's first frame to be acknowledged
+  before playing anyway. Evidence first, sound second, for the voice as much as for the siren:
+  both tell the person in the room that something is watching.
+- Neither plays during warm-up, in `paused` mode, or inside the window after a session unlock
+  (3.8). Arming (3.8) gates both.
+- **Audio readiness is checked up front and continuously**: `camtrap siren-test` and
+  `camtrap warn-test` play the real files on the real speakers, and the heartbeat carries
+  `sound_ok` — sink present, mute cleared, siren file in place, **and one file present for every
+  language in `WARN_LANGS`**. A missing `warn-th.ogg` must fail loudly at home, not silently in
+  the room.
+- What played, when, and whether it played before the frame was acknowledged goes into the
+  manifest (`sound_played`, `sound_stage`, `sound_langs`, latency) and into the Telegram caption.
 
 **Holding the siren on: the input problem.** A siren that a mute key silences is not a siren.
 The mute, volume-down and power keys all arrive from the same built-in keyboard device as the
@@ -316,7 +375,7 @@ letters (verified on the target machine: `AT Translated Set 2 keyboard` reports 
 exclusive grab of that device would also take away the only way the owner can type the unlock
 password. The defence is therefore layered, strongest and least intrusive first:
 
-1. **Volume watchdog — the primary mechanism.** While the siren plays, every
+1. **Volume watchdog — the primary mechanism.** While any sound plays — warning or siren — every
    `SOUND_HOLD_POLL_MS = 250` the agent re-asserts the whole audio path: unmute,
    `SOUND_VOLUME_PCT`, the card profile with a `Speaker` port, and `Auto-Mute Mode` disabled so
    that a plugged headphone jack cannot silence the speakers (on the target machine that control
@@ -434,20 +493,27 @@ camtrap calibrate [--sec N] N seconds of noise statistics, prints a recommended 
 camtrap mask                take a frame and write the ignore mask into the config
 camtrap siren-test          play the siren into the configured sink at real volume
 camtrap siren-make          generate siren.ogg (ffmpeg; --mode yelp|wail)
+camtrap warn-test           play the spoken warning in every configured language, in order
+camtrap warn-make --lang X  generate warn-<lang>.ogg (espeak-ng + ffmpeg)
+camtrap setup               suggest WARN_LANGS from the system time zone; writes nothing itself
 camtrap input-scan          list input devices reporting mute/volume keys (for the grab list)
 camtrap pause | resume      expected offline
-camtrap status              local state: mode, spool, last heartbeat
+camtrap status              local state: mode, spool, last heartbeat, sound files, languages
 camtrap install             installs and enables the systemd --user unit
 ```
 
 `selftest` and `calibrate` are mandatory at home before departure. Tuning the detector in a
 hotel room on the first evening is a reliable way to travel with a trap that does not work.
 
-`siren-test` is run twice: at home, to confirm the file is generated and audible at all, and in
-the hotel room before the first arming, to confirm it plays through the speakers at the volume
-intended. The second run is not optional, because the sink changes with a single plugged cable:
-a jack in the 3.5 mm socket moves the card to its `Headphones` profile and the built-in speakers
-go quiet.
+`siren-test` and `warn-test` are run twice: at home, to confirm the files exist and are audible at
+all, and in the hotel room before the first arming, to confirm they play through the speakers at
+the volume intended. The second run is not optional, because the sink changes with a single
+plugged cable: a jack in the 3.5 mm socket moves the card to its `Headphones` profile and the
+built-in speakers go quiet.
+
+`warn-test` has a second purpose: it is the moment to judge whether the synthesised speech is
+actually intelligible in the target language. If it is not, the file gets replaced before
+departure — see 3.4.
 
 ---
 
@@ -474,7 +540,9 @@ camtrap/
 │   ├── uploader.py       ssh transport plus a fake sink for tests
 │   ├── heartbeat.py
 │   └── selftest.py
+├── assets/voice/         warn-<lang>.txt — the warning text per language, checked by a speaker
 ├── tools/make-siren.sh   ffmpeg → siren.ogg (yelp | wail)
+├── tools/make-warning.sh espeak-ng + ffmpeg → warn-<lang>.ogg
 ├── deploy/
 │   ├── prod/camtrap-recv.sh
 │   ├── prod/camtrap-tg.sh
@@ -537,8 +605,15 @@ No camera is available in CI, so everything that can be is tested against synthe
   `paused`, or inside the unlock window; it honours the cooldown and the per-event and per-hour
   limits; it plays after the first frame is acknowledged, and when the receiver is unreachable
   it plays after `SOUND_DELAY_MAX_SEC` and marks that in the manifest.
-- **Audio readiness** — a missing siren file, a muted sink and an absent sink all produce
-  `sound_ok = false` in the heartbeat instead of a silent failure at event time.
+- **Two stages** — a `motion` event plays the warning and never the siren; a `tamper` event plays
+  the siren and never the warning; `light` plays nothing by default. A `tamper` arriving mid-warning
+  cuts the warning off and starts the siren without waiting for it to finish. The session lock is
+  requested on `tamper` only, never on `motion`.
+- **Languages** — files play in `WARN_LANGS` order, local language before English; a language with
+  no generated file is reported at startup and in `sound_ok`, not skipped silently at event time.
+- **Audio readiness** — a missing siren file, a missing file for any configured language, a muted
+  sink and an absent sink all produce `sound_ok = false` in the heartbeat instead of a silent
+  failure at event time.
 - **Siren hold** — against fakes for the mixer and the session: a mute applied mid-burst is
   reverted within one `SOUND_HOLD_POLL_MS` tick, a volume drop is restored, a card profile
   switched away from `Speaker` is switched back, and the session lock is requested exactly once
@@ -594,6 +669,7 @@ sequence kept for regression.
 - System power settings (desktop power manager, `logind.conf`): that is the owner's machine, and
   the agent does not rewrite them — it holds its own inhibitor and verifies the result.
 - The final siren mode and volume.
+- The wording of the spoken warning and the language list, before the files are generated.
 - Enabling the optional exclusive grab of external input devices, and any change to
   `kernel.sysrq` (currently `16`, which is the safe value here).
 
@@ -603,9 +679,16 @@ sequence kept for regression.
 - Do not reuse the existing ssh keys of another project's monitoring: camtrap creates its own.
 - Do not record audio. Playing is fine, capturing is not, and that does not change.
 - Do not play the siren on ordinary motion or on a lighting change, while `paused`, during
-  warm-up, or more often than `SOUND_COOLDOWN_SEC`.
-- Do not add a voice claiming to be the police or any other authority. An alarm sound is an
-  alarm sound; impersonating officials is a different act with different consequences.
+  warm-up, or more often than `SOUND_COOLDOWN_SEC`. Motion gets the voice; only tampering gets
+  the siren, and confusing the two is the fastest way to lose the room's goodwill.
+- Do not add a voice claiming to be the police or any other authority, and do not put anything in
+  the warning that is not a fact: no "the police have been called", no "security is on the way",
+  no threats. An alarm sound is an alarm sound; impersonating officials is a different act with
+  different consequences.
+- Do not ship a warning nobody in the room can understand. A file that has not been checked for
+  intelligibility in its language is not ready, however cleanly it was generated.
+- Do not take hostile measures on the warning stage — no session lock, no input grab. Stage 1 is
+  a notice; escalation is what stage 2 is for.
 - Do not grab the built-in keyboard exclusively. It is the only way the owner can type the
   unlock password, and a trap that locks out its owner in a foreign hotel room is worse than the
   theft it guards against. External devices only, and only for the burst.
@@ -635,6 +718,11 @@ the police. Volume is its own subtlety: at night a siren in a room is heard in t
 will bring hotel staff. For this task that is closer to a benefit than a cost, but the effect
 should be deliberate rather than accidental.
 
+The spoken warning helps on this axis rather than hurting. Announcing that a space is recorded is
+what signage does in shops and lobbies, and saying it out loud in the local language means the
+person who walks in is informed rather than filmed unawares — which is exactly the distinction the
+right to one's own image turns on. It only holds while the sentence stays a statement of fact.
+
 ---
 
 ## 9. Phases
@@ -647,15 +735,19 @@ lottery.
 
 Detector with warm-up, mask and lighting suppression · events with pre-buffer and throttling ·
 tamper on power and lid · separation of case movement from lighting change with the ALS arbiter ·
-`player` with limits, the siren generator and the hold layers (volume watchdog, session lock,
-inhibitors) · spool with priorities and a cap
+`player` with both stages, per-language warning files, limits, the siren generator and the hold
+layers (volume watchdog, session lock, inhibitors) · spool with priorities and a cap
 · uploader with retries · heartbeat with `sound_ok` · `camtrap-recv.sh` · `camtrap-tg.sh` with
 `sendPhoto` · `camtrap-poll.sh` on the Pi with the 🚨 tamper alert · pause/resume · systemd unit
-· `selftest`, `calibrate`, `siren-test` · the tests from section 7 · `docs/runbook.md`.
+· `selftest`, `calibrate`, `siren-test`, `warn-test` · the tests from section 7 ·
+`docs/runbook.md`.
 
-The audible part is small in volume (sink selection, an external player, limit counters), but it
-cannot be deferred: it is the only part that works when connectivity is dead, and it has to be
-exercised during the same two shakedown days as everything else.
+The audible part is small in volume (sink selection, an external player, limit counters, a text
+file per language), but it cannot be deferred: it is the only part that works when connectivity is
+dead, and it has to be exercised during the same two shakedown days as everything else. The one
+item on it with a real lead time is intelligibility: getting a native speaker to listen to the
+Vietnamese and Thai files needs to start early, because the fix — a better recording — is not
+something code can produce.
 
 ### Phase 2 — after the trip
 
@@ -704,9 +796,10 @@ non-obvious one. The owner's call.
 8. Siren mode and volume: `yelp` at `SOUND_VOLUME_PCT = 100` is audible in the corridor and at
    night will bring hotel staff. Is that the desired effect (I think it is), or should it be
    `wail` at 70?
-9. Whether a siren should also fire on `light` — someone came in and switched the light on but
-   did not touch the laptop. I suggest not: that is the most likely cleaning scenario, and noise
-   there is a pure false positive.
+9. Whether the **warning** should also fire on `light` — someone came in and switched the light on
+   without producing confirmed motion yet, which happens when they enter from a dark corridor. The
+   siren certainly should not. I lean towards yes for the voice, since a light going on in an empty
+   room means a person is in it, but it is one more thing housekeeping will hear.
 10. Delivery interval for `tamper`: the shared two-minute tick, or a separate cheap tick every
     minute that only checks the tamper flag on the VPS. The latter costs one extra ssh per
     minute and halves the delay on the one alert where delay is actually felt.
@@ -718,7 +811,15 @@ non-obvious one. The owner's call.
     without one first and checking the journal for whether the composite of power, lid and frame
     shift ever fired; buying hardware for a hypothesis before there is data is premature.
 13. Residual risk of the siren, to be reviewed after the trip: it does not tell the intruder
-    that frames have already left, which is why it was chosen over a spoken warning — but it
-    also does not remove impunity as directly. If it turns out that a siren makes people grab
-    the laptop and run, the answer is not a different sound but a faster acknowledgement of the
-    first frame.
+    that frames have already left, which is why it stays wordless — but it also does not remove
+    impunity as directly. If it turns out that a siren makes people grab the laptop and run, the
+    answer is not a different sound but a faster acknowledgement of the first frame.
+14. Escalation from stage 1 to stage 2 without tampering: if motion continues for
+    `ESCALATE_AFTER_SEC` after the warning and nobody has left, should the siren follow? Currently
+    no — the siren is reserved for the laptop being handled. Worth revisiting after the first trip
+    with real journals, because "warned, ignored, still in the room" is a different situation from
+    "walked past the desk".
+15. Whether the warning should say more than it does now. "This laptop is protected by an alarm and
+    a camera" is neutral; adding "and the owner has been notified" would increase pressure but also
+    tell the intruder that evidence has already left the machine — the exact trade rejected for the
+    siren. Keeping both sounds free of that claim is deliberate.
