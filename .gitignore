@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# рабочие данные и снимки — в репозиторий не попадают никогда
+spool/
+captures/
+*.jpg
+*.jpeg
+*.png
+!tests/fixtures/*.jpg
+
+# запись-предупреждение генерируется tools/make-sound.sh, в репозитории только текст
+*.ogg
+*.wav
+config.toml
+
+# конкретика развёртывания: отель, даты, адреса боксов, имена ключей
+TRIP.local.md
+*.local.md
