@@ -160,6 +160,17 @@ whether the trap travels.
 
 ---
 
+## What is left, and why code cannot close it
+
+- **S1.8** physical pass — pull the cable, close the lid, press mute mid-burst, press power. Needs
+  hands on the machine and a room where a siren is acceptable.
+- **S1.11** intelligibility — a native speaker has to listen to `warn-vi.ogg` and `warn-th.ogg`.
+  Longest lead time in the whole plan.
+- **S2.7** 30-minute empty-room run — checkpoint 2 (zero events, zero warnings).
+- **S3/S4 deployment** — new ssh keys, `camtrap-recv.sh`, `camtrap-tg.sh` and the cron file on the
+  boxes. Held at checkpoint 3 by the owner's own rule: nothing is installed there without review.
+- **S6.4** 24-hour empty-room run — checkpoint 4, the gate that decides whether the trap travels.
+
 ## Open questions that block work
 
 - **None block S1–S4.** Arming was decided (`on_lock` + manual); sound is two-stage (warning on

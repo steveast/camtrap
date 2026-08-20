@@ -76,6 +76,7 @@ class Runner:
         self.stats = LoopStats()
         self._stop = False
         self._last_housekeeping = float("-inf")
+        self._warned_event: str | None = None
         self.responder.set_gate(self.arming.gate)
 
     def request_stop(self, *_: object) -> None:
@@ -113,7 +114,10 @@ class Runner:
             self.stats.motion_events += 1
             event = self.events.begin(EventKind.MOTION, now=now, frame=frame)
             self.events.note_motion(now=now)
-            if event.frames_written <= self.cfg.event.prebuffer_frames + 1:
+            # One warning per event. Asking per frame would re-enter the responder five times a
+            # second and bury the journal in sound_skip lines.
+            if self._warned_event != event.event_id:
+                self._warned_event = event.event_id
                 self.motion(now)
         elif detection.kind is EventKind.LIGHT:
             self.stats.light_events += 1

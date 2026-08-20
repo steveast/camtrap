@@ -231,3 +231,21 @@ def test_siren_plays_anyway_when_the_receiver_is_unreachable(responder):
     responder.set_ack_waiter(lambda timeout: False)
     result = responder.on_tamper(["ac_offline"], now=0.0)
     assert result.played and not result.evidence_confirmed
+
+
+def test_repeated_refusals_are_logged_once(responder, capsys):
+    responder.set_gate(lambda stage, now: (False, "not_armed"))
+    for tick in range(5):
+        responder.on_motion(now=float(tick))
+    out = capsys.readouterr().out
+    assert out.count("sound_skip") == 1, "a refusal repeated per frame must not spam the journal"
+
+
+def test_a_changed_reason_is_logged_again(responder, capsys):
+    reasons = iter(["not_armed", "not_armed", "paused", "paused"])
+    responder.set_gate(lambda stage, now: (False, next(reasons)))
+    for tick in range(4):
+        responder.on_motion(now=float(tick))
+    out = capsys.readouterr().out
+    assert out.count("sound_skip") == 2
+    assert "reason=not_armed" in out and "reason=paused" in out

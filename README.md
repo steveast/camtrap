@@ -22,9 +22,20 @@ concrete conversation with hotel management and a usable police report.
 It is not a lock. It does not record video, never records audio, recognises no faces, and keeps
 no database of people.
 
-**Status: specification, no code yet.** Everything substantive is in [SPEC.md](SPEC.md); the
-hotel-theft data the requirements grew from is in
-[docs/threat-model.md](docs/threat-model.md).
+**Status: phase 1 implemented.** The agent, the receiver scripts and the poller are in place
+with 185 tests; what remains is physical — a siren heard in a real room, a native speaker
+confirming the warning, and a 24-hour run in an empty one. See [tasks/todo.md](tasks/todo.md).
+
+The design and its reasoning are in [SPEC.md](SPEC.md), the hotel-theft data the requirements grew
+from is in [docs/threat-model.md](docs/threat-model.md), and what to do on arrival — and when it
+fires — is in [docs/runbook.md](docs/runbook.md).
+
+```sh
+deploy/install-laptop.sh     # venv, sounds, systemd --user unit
+camtrap selftest             # camera, audio path, arming, inhibitors, receiver
+camtrap siren-test            # loud, from the built-in speakers
+camtrap warn-test             # intelligible in the local language
+```
 
 ## How it fits together
 

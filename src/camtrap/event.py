@@ -52,6 +52,7 @@ class EventWriter:
         self._ring_last = float("-inf")
         self.active: Event | None = None
         self._wall = wall_clock or __import__("time").time
+        self._used_ids: set[str] = set()
 
     # --- observation ---------------------------------------------------------
 
@@ -79,12 +80,21 @@ class EventWriter:
             self.active.last_motion = now
             return self.active
 
+        # The id is second-resolution, so two events starting inside the same second would
+        # share it and their frames would overwrite each other. Nudge the stamp forward until the
+        # id is free: the manifest still carries the real start time.
         stamp = self._wall()
+        event_id = f"evt_{log.utc_stamp(stamp)}"
+        while event_id in self._used_ids or (self.cfg.spool_dir / f"{event_id}.json").exists():
+            stamp += 1.0
+            event_id = f"evt_{log.utc_stamp(stamp)}"
+        self._used_ids.add(event_id)
+
         event = Event(
-            event_id=f"evt_{log.utc_stamp(stamp)}",
+            event_id=event_id,
             kind=kind,
             started=now,
-            started_wall=stamp,
+            started_wall=self._wall(),
             signals=list(signals or []),
             last_motion=now,
         )

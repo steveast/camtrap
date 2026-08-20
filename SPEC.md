@@ -5,7 +5,8 @@ every ~5 s while motion lasts, immediate off-box upload, and a Telegram alert wi
 Sound escalates in two stages — a spoken warning in the local language when someone is in the
 room, a police siren when the laptop itself is picked up.
 
-Status: draft specification, no code yet. Date: 2026-08-19.
+Status: phase 1 implemented (see `tasks/todo.md` for what is left, all of it physical).
+Specification date: 2026-08-19.
 
 ---
 

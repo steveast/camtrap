@@ -218,6 +218,7 @@ class SoundResponder:
         self._siren_this_event = 0
         self._siren_times: deque[float] = deque()
         self._warn_times: deque[float] = deque()
+        self._last_skip: tuple[str, str] | None = None
 
     # --- wiring --------------------------------------------------------------
 
@@ -243,12 +244,12 @@ class SoundResponder:
     def _respond(self, stage: Stage, *, now: float, signals: list[str]) -> Played:
         allowed, reason = self._gate(stage, now)
         if not allowed:
-            log.emit("sound_skip", stage=stage.value, reason=reason or "gate")
+            self._log_skip(stage, reason or "gate")
             return Played(stage=stage, played=False, reason=reason or "gate")
 
         blocked = self._limit_reason(stage, now)
         if blocked:
-            log.emit("sound_skip", stage=stage.value, reason=blocked)
+            self._log_skip(stage, blocked)
             return Played(stage=stage, played=False, reason=blocked)
 
         paths = self._files(stage)
@@ -265,6 +266,7 @@ class SoundResponder:
             if self.cfg.sound.lock_session_on_tamper:
                 self._run([*self.cfg.sound.loginctl_cmd, "lock-session"])
 
+        self._last_skip = None
         volume = (
             self.cfg.sound.volume_pct if stage is Stage.SIREN else self.cfg.sound.warn_volume_pct
         )
@@ -281,6 +283,15 @@ class SoundResponder:
             evidence=confirmed,
         )
         return Played(stage=stage, played=True, calls=paths, evidence_confirmed=confirmed)
+
+    def _log_skip(self, stage: Stage, reason: str) -> None:
+        """Log a refusal once per (stage, reason) run. Repeating it per frame buries the journal
+        and hides the lines that matter — events, drops, retries, mode changes."""
+        key = (stage.value, reason)
+        if key == self._last_skip:
+            return
+        self._last_skip = key
+        log.emit("sound_skip", stage=stage.value, reason=reason)
 
     # --- playback ------------------------------------------------------------
 

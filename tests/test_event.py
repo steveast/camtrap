@@ -109,3 +109,29 @@ def test_first_frame_is_named_so_priority_is_visible(writer):
     event = writer.begin(EventKind.TAMPER, now=1.0, frame=_frame())
     first = sorted(writer.cfg.spool_dir.glob(f"{event.event_id}_*.jpg"))[0]
     assert first.name.endswith("_000.jpg")
+
+
+def test_two_events_in_the_same_second_get_distinct_ids(cfg):
+    """Second-resolution ids would otherwise collide and overwrite each other's frames."""
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    frozen = 1787000000.0
+    writer = EventWriter(cfg, wall_clock=lambda: frozen)
+    writer.observe(_frame(), now=0.0)
+    first = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    writer.close(now=1.0)
+    second = writer.begin(EventKind.MOTION, now=2.0, frame=_frame())
+    assert first.event_id != second.event_id
+    writer.close(now=3.0)
+    manifests = sorted(p.name for p in cfg.spool_dir.glob("evt_*.json"))
+    assert len(manifests) == 2
+
+
+def test_an_id_already_on_disk_is_not_reused(cfg):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    frozen = 1787000000.0
+    stale = cfg.spool_dir / "evt_20260813T221320Z.json"
+    stale.write_text("{}")
+    writer = EventWriter(cfg, wall_clock=lambda: frozen)
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    assert event.event_id != "evt_20260813T221320Z"

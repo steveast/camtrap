@@ -224,3 +224,30 @@ def test_light_can_be_configured_to_warn(framed):
     runner.on_frame(blank(215), now=100.0)
     assert runner.spawned.played("warn-vi.ogg")
     assert not runner.spawned.played("siren.ogg")
+
+
+def test_warning_is_requested_once_per_event_not_once_per_frame(framed):
+    """Asking per frame re-enters the responder five times a second and buries the journal."""
+    runner, blank, _cmds = framed
+    for index in range(12):
+        frame = blank()
+        frame[120:260, 100 + index * 15 : 230 + index * 15] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+    warnings = [p for p in runner.spawned if any("warn-" in a for a in p.argv)]
+    assert len(warnings) == 1, f"expected one warning burst, got {len(warnings)}"
+
+
+def test_a_new_event_warns_again(framed):
+    runner, blank, _cmds = framed
+    for index in range(4):
+        frame = blank()
+        frame[120:260, 100 + index * 20 : 230 + index * 20] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+    # let the event close, then move again well past the warning cooldown
+    runner.on_frame(blank(), now=200.0)
+    for index in range(4):
+        frame = blank()
+        frame[120:260, 100 + index * 20 : 230 + index * 20] = 210
+        runner.on_frame(frame, now=400.0 + index * 0.2)
+    warnings = [p for p in runner.spawned if any("warn-" in a for a in p.argv)]
+    assert len(warnings) == 2
