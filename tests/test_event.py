@@ -219,3 +219,35 @@ def test_boosted_frames_are_recorded_in_the_manifest(cfg):
     writer.close(now=60.0)
     manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
     assert manifest["boosted_frames"] == 1
+
+
+def test_the_manifest_names_the_most_changed_frame_not_the_oldest(cfg):
+    """The first frame by number is the oldest pre-buffer frame: an empty room five seconds early.
+
+    Sending that as "the photo" is why a person walking into the room appeared to go
+    unphotographed — the capture was fine, the wrong frame was delivered.
+    """
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    for tick in range(6):
+        writer.observe(_frame(50), now=float(tick))  # quiet room into the ring
+    event = writer.begin(EventKind.MOTION, now=6.0, frame=_frame(60), changed_pct=1.2)
+    writer.feed(_frame(200), now=12.0, changed_pct=11.4)  # the person
+    writer.feed(_frame(70), now=18.0, changed_pct=2.0)
+    writer.close(now=60.0)
+
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["key_changed_pct"] == 11.4
+    assert manifest["key_frame"].endswith("_006.jpg"), manifest["key_frame"]
+    assert manifest["key_frame"] != f"{event.event_id}_000.jpg"
+
+
+def test_key_frame_defaults_to_the_trigger_when_nothing_beats_it(cfg):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=1.0, frame=_frame(220), changed_pct=8.0)
+    writer.close(now=60.0)
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["key_frame"].endswith("_001.jpg")  # index 0 is the single pre-buffer frame
+    assert manifest["key_changed_pct"] == 8.0

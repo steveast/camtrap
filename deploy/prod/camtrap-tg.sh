@@ -15,6 +15,7 @@
 #   state                      the stored heartbeat line, plus hb_age=<seconds>
 #   manifest <name>            print one manifest
 #   send-photo <name>          stdin: <token>\n<chat_id>\n<caption...>
+#   send-album <n1,n2,...>     stdin: <token>\n<chat_id>\n<caption...>  (up to 10, one group)
 #   send-message               stdin: <token>\n<chat_id>\n<text...>
 #   delete <name>              remove one delivered artefact
 set -eu
@@ -88,6 +89,46 @@ case "$verb" in
         log "tick verb=send-photo name=$name code=$code"
         [ "$code" = "200" ] || die tg_http "$code"
         echo "ok send-photo $name"
+        ;;
+
+    send-album)
+        [ "$argc" -eq 2 ] || die bad_arity "$argc"
+        IFS= read -r token || die no_token
+        IFS= read -r chat || die no_chat
+        caption=$(cat)
+
+        # Build a sendMediaGroup call: JSON describing the items, plus one attachment per file.
+        media=""; forms=""; count=0
+        old_ifs=$IFS; IFS=','
+        for one in $name; do
+            IFS=$old_ifs
+            valid_name "$one" || die bad_name "$one"
+            [ -f "$INBOX/$one" ] || die missing "$one"
+            [ "$count" -lt 10 ] || break
+            # Caption rides on the first item only; Telegram shows it under the group.
+            if [ "$count" -eq 0 ]; then
+                item="{\"type\":\"photo\",\"media\":\"attach://p$count\",\"caption\":$(
+                    printf '%s' "$caption" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\n' |
+                    sed 's/^/"/; s/\\n$/"/'
+                )}"
+            else
+                item="{\"type\":\"photo\",\"media\":\"attach://p$count\"}"
+            fi
+            [ -z "$media" ] && media="$item" || media="$media,$item"
+            forms="$forms -F p$count=@$INBOX/$one"
+            count=$((count + 1))
+            IFS=','
+        done
+        IFS=$old_ifs
+        [ "$count" -gt 0 ] || die no_files
+
+        # shellcheck disable=SC2086
+        code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$CURL_MAX_TIME" \
+            -F "chat_id=$chat" -F "media=[$media]" $forms \
+            "$API/bot$token/sendMediaGroup" || echo 000)
+        log "tick verb=send-album count=$count code=$code"
+        [ "$code" = "200" ] || die tg_http "$code"
+        echo "ok send-album $count"
         ;;
 
     send-message)

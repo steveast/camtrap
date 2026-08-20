@@ -37,6 +37,11 @@ class Event:
     sound_latency_ms: int | None = None
     sound_evidence_confirmed: bool = False
     boosted_frames: int = 0
+    #: Frame index that showed the most change — the one worth looking at. The first frame by
+    #: number is the OLDEST pre-buffer frame, five seconds before anything happened: an empty
+    #: room. Sending that as "the photo" is why a person walking in appeared to go unphotographed.
+    key_index: int = 0
+    key_changed_pct: float = 0.0
 
     @property
     def single_frame(self) -> bool:
@@ -112,7 +117,9 @@ class EventWriter:
 
         trigger = frame if frame is not None else (self._ring[-1][1] if self._ring else None)
         if trigger is not None:
-            self._write_frame(event, trigger, now=now, throttled=True)
+            self._write_frame(
+                event, trigger, now=now, throttled=True, changed_pct=changed_pct or 0.0
+            )
 
         # Write the manifest immediately, marked open. If the agent dies mid-event — battery
         # pulled, machine shut down, laptop carried off — the frames would otherwise arrive with
@@ -155,7 +162,7 @@ class EventWriter:
                 event.truncated = True
                 log.emit("event_truncated", id=event.event_id, cap=event.frames_written)
             return False
-        self._write_frame(event, frame, now=now, throttled=True)
+        self._write_frame(event, frame, now=now, throttled=True, changed_pct=changed_pct)
         if boosted:
             event.boosted_frames += 1
         # Keep the on-disk count roughly current without rewriting JSON for every frame.
@@ -202,7 +209,13 @@ class EventWriter:
     # --- artefacts -----------------------------------------------------------
 
     def _write_frame(
-        self, event: Event, frame: np.ndarray | None, *, now: float, throttled: bool
+        self,
+        event: Event,
+        frame: np.ndarray | None,
+        *,
+        now: float,
+        throttled: bool,
+        changed_pct: float = 0.0,
     ) -> None:
         if frame is None:
             return
@@ -213,6 +226,9 @@ class EventWriter:
             log.emit("frame_error", id=event.event_id, index=index)
             return
         event.frames_written = index + 1
+        if changed_pct > event.key_changed_pct:
+            event.key_changed_pct = changed_pct
+            event.key_index = index
         if throttled:
             event.last_frame_at = now
 
@@ -227,6 +243,9 @@ class EventWriter:
             "ended": event.started_wall + max(0.0, (event.ended or event.started) - event.started),
             "frames": event.frames_written,
             "boosted_frames": event.boosted_frames,
+            # The frame worth sending: most changed, not oldest.
+            "key_frame": f"{event.event_id}_{event.key_index:03d}.jpg",
+            "key_changed_pct": round(event.key_changed_pct, 2),
             "truncated": event.truncated,
             "agent_version": __version__,
             "sound_played": event.sound_played,

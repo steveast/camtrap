@@ -38,6 +38,12 @@ case "$verb" in
       cat > {outbox}/photo-"$name".txt
       if [ -f {tmp_path}/fail-send ]; then exit 1; fi
       echo "ok send-photo $name" ;;
+  send-album*)
+      names=$(echo "$verb" | cut -d' ' -f2)
+      n=$(ls {outbox} | grep -c '^album-' || true)
+      {{ echo "$names"; cat; }} > {outbox}/album-"$n".txt
+      if [ -f {tmp_path}/fail-send ]; then exit 1; fi
+      echo "ok send-album" ;;
   send-message)
       n=$(ls {outbox} | grep -c '^message-' || true)
       cat > {outbox}/message-"$n".txt
@@ -78,18 +84,28 @@ esac
         def sent(self):
             return sorted(p.name for p in self.outbox.iterdir())
 
+        def deliveries(self):
+            """Photos and albums both count as one event delivered."""
+            return [n for n in self.sent() if n.startswith(("photo-", "album-"))]
+
         def body(self, name):
             return (self.outbox / name).read_text()
 
-        def add_event(self, event, kind, frames=3, signals=None, sound=None, mtime=1787000000):
-            self.listing.write_text(
-                self.listing.read_text()
-                + f"{event}_000.jpg 1024 {mtime}.0\n{event}.json 200 {mtime}.0\n"
+        def add_event(
+            self, event, kind, frames=3, signals=None, sound=None, mtime=1787000000, key=None
+        ):
+            rows = "".join(
+                f"{event}_{index:03d}.jpg 1024 {mtime}.0\n" for index in range(max(1, frames))
             )
+            self.listing.write_text(
+                self.listing.read_text() + rows + f"{event}.json 200 {mtime}.0\n"
+            )
+            self._key = key
             sig = "" if not signals else '"signals":' + str(list(signals)).replace("'", '"') + ","
             snd = "" if not sound else f'"sound_stage":"{sound}",'
+            key_field = f'"key_frame":"{key}",' if key else ""
             (self.manifests / f"{event}.json").write_text(
-                f'{{"type":"{kind}",{sig}{snd}"frames":{frames}}}'
+                f'{{"type":"{kind}",{sig}{snd}{key_field}"frames":{frames}}}'
             )
 
         def set_state(self, **fields):
@@ -104,15 +120,32 @@ def test_syntax_is_posix_clean():
     assert subprocess.run(["sh", "-n", str(SCRIPT)], check=False).returncode == 0
 
 
-def test_a_motion_event_is_sent_as_a_photo(rig):
+def test_a_motion_event_is_delivered_with_its_frames(rig):
     rig.add_event("evt_20260820T101010Z", "motion", frames=4)
     result = rig.run()
     assert result.returncode == 0, result.stderr.decode()
-    assert "photo-evt_20260820T101010Z_000.jpg.txt" in rig.sent()
-    body = rig.body("photo-evt_20260820T101010Z_000.jpg.txt")
-    assert body.startswith("TESTTOKEN\n42\n")
+    assert rig.deliveries(), "the event must be delivered"
+    body = rig.body(rig.deliveries()[0])
     assert "📷" in body and "movement in the room" in body
     assert "frames: 4" in body
+
+
+def test_the_key_frame_leads_the_album(rig):
+    """The first frame by number is an empty room seconds before anything happened."""
+    rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
+    rig.run()
+    album = [n for n in rig.sent() if n.startswith("album-")]
+    assert album, "several frames should travel as one group"
+    body = rig.body(album[0])
+    names = body.splitlines()[0]
+    assert names.startswith("evt_20260820T111500Z_005.jpg"), names
+    assert "evt_20260820T111500Z_000.jpg" in names, "the rest still follow"
+
+
+def test_a_single_frame_event_falls_back_to_one_photo(rig):
+    rig.add_event("evt_20260820T112000Z", "light", frames=1)
+    rig.run()
+    assert any(n.startswith("photo-") for n in rig.sent())
 
 
 def test_a_tamper_event_gets_its_own_icon_and_signals(rig):
@@ -124,7 +157,7 @@ def test_a_tamper_event_gets_its_own_icon_and_signals(rig):
         sound="siren",
     )
     rig.run()
-    body = rig.body("photo-evt_20260820T111111Z_000.jpg.txt")
+    body = rig.body(rig.deliveries()[0])
     assert "🚨" in body
     assert "ac_offline" in body and "lid_closed" in body
     assert "sound: siren" in body
@@ -256,7 +289,7 @@ def test_an_unclosed_event_is_flagged_in_the_caption(rig):
         '{"type":"tamper","closed":false,"signals":["ac_offline"],"frames":5}'
     )
     rig.run()
-    body = rig.body("photo-evt_20260820T121212Z_000.jpg.txt")
+    body = rig.body(rig.deliveries()[0])
     assert "still running when the agent stopped" in body
     assert "🚨" in body
 
@@ -270,7 +303,7 @@ def test_a_closed_event_carries_no_such_note(rig):
         '{"type":"motion","closed":true,"frames":9}'
     )
     rig.run()
-    body = rig.body("photo-evt_20260820T131313Z_000.jpg.txt")
+    body = rig.body(rig.deliveries()[0])
     assert "still running" not in body
 
 
@@ -279,8 +312,7 @@ def test_every_event_is_sent_by_default(rig):
     for index in range(7):
         rig.add_event(f"evt_2026082019{index:02d}00Z", "motion", frames=3)
         rig.run()
-    photos = [n for n in rig.sent() if n.startswith("photo-")]
-    assert len(photos) == 7, f"all seven must be sent, got {len(photos)}"
+    assert len(rig.deliveries()) == 7, f"all seven must be sent, got {len(rig.deliveries())}"
     bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
     assert not [b for b in bodies if "not sent individually" in b], "no summary when uncapped"
 
@@ -291,8 +323,7 @@ def test_the_cap_can_still_be_switched_on(rig):
     for index in range(6):
         rig.add_event(f"evt_2026082014{index:02d}00Z", "motion", frames=3)
         rig.run()
-    photos = [n for n in rig.sent() if n.startswith("photo-")]
-    assert len(photos) == 3, f"cap is 3, sent {len(photos)}"
+    assert len(rig.deliveries()) == 3, f"cap is 3, sent {len(rig.deliveries())}"
 
 
 def test_tamper_is_never_capped(rig):
@@ -302,8 +333,7 @@ def test_tamper_is_never_capped(rig):
     for index in range(3):
         rig.add_event(f"evt_2026082016{index:02d}00Z", "tamper", signals=["ac_offline"])
         rig.run()
-    photos = [n for n in rig.sent() if n.startswith("photo-")]
-    assert len(photos) == 4, "one motion plus three tampers must all get through"
+    assert len(rig.deliveries()) == 4, "one motion plus three tampers must all get through"
 
 
 def test_suppressed_events_arrive_as_a_summary(rig):

@@ -23,6 +23,10 @@ TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
 # missed event cannot be recovered from a summary. Set MOTION_ALERTS_PER_HOUR to a positive
 # number to cap ordinary motion (tamper is never capped) if the flow becomes unusable.
 MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
+# How many frames of one event to send as a group. The first frame BY NUMBER is the oldest
+# pre-buffer frame — an empty room seconds before anything happened — so the manifest's key_frame
+# leads, and the rest follow as an album. 1 disables the album.
+ALBUM_MAX="${ALBUM_MAX:-6}"
 SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
@@ -40,6 +44,10 @@ send_message() {
 
 send_photo() {
     printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$2" | remote "send-photo $1"
+}
+
+send_album() {
+    printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$2" | remote "send-album $1"
 }
 
 local_time() {
@@ -144,6 +152,9 @@ for event in $events; do
         sed -n 's/.*"signals":\[\([^]]*\)\].*/\1/p' | tr -d '"')
     sound=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"sound_stage":"\([a-z]*\)".*/\1/p')
     closed=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"closed":\([a-z]*\).*/\1/p')
+    key=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"key_frame":"\([^"]*\)".*/\1/p')
+    key_pct=$(printf '%s' "$manifest" | tr -d ' \n' |
+        sed -n 's/.*"key_changed_pct":\([0-9.]*\).*/\1/p')
     : "${type:=motion}"
     : "${frames:=1}"
 
@@ -171,7 +182,8 @@ note: event was still running when the agent stopped"
 time: $when
 type: $type${signals:+
 signals: $signals}
-frames: $frames${sound:+
+frames: $frames${key_pct:+
+motion: $key_pct% of frame}${sound:+
 sound: $sound}$cut_short"
 
     now_epoch=$(date -u +%s)
@@ -183,7 +195,34 @@ sound: $sound}$cut_short"
         continue
     fi
 
-    first="${event}_000.jpg"
+    # The frame worth looking at, per the manifest; fall back to the first by number.
+    first="${key:-${event}_000.jpg}"
+    printf '%s\n' "$listing" | grep -q "^$first " || first="${event}_000.jpg"
+
+    # Album: the key frame leads, the rest of the event follows in order.
+    album="$first"
+    if [ "$ALBUM_MAX" -gt 1 ]; then
+        count=1
+        for candidate in $(printf '%s\n' "$listing" | awk '{print $1}' |
+                grep "^${event}_.*\.jpg$" | sort); do
+            [ "$candidate" = "$first" ] && continue
+            [ "$count" -lt "$ALBUM_MAX" ] || break
+            album="$album,$candidate"
+            count=$((count + 1))
+        done
+    fi
+
+    if [ "$ALBUM_MAX" -gt 1 ] && [ "$album" != "$first" ]; then
+        if send_album "$album" "$caption"; then
+            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
+            [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
+            [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
+            log "event id=$event type=$type frames=$frames key=$first album=1 sent=1"
+            continue
+        fi
+        log "event id=$event album_failed=1 falling back to single photo"
+    fi
+
     if printf '%s\n' "$listing" | grep -q "^$first "; then
         if send_photo "$first" "$caption"; then
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"

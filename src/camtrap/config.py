@@ -46,8 +46,13 @@ class CameraConfig:
 @dataclass
 class DetectorConfig:
     warmup_sec: float = 20.0
-    min_area_pct: float = 0.8
-    min_motion_frames: int = 3
+    # Measured in the owner's room: a curtain moving in the wind changes 0.9-1.3 % of the frame,
+    # a person entering changes 10-11 %. A 0.8 % threshold therefore fired on the curtain all
+    # afternoon and buried the person in the same event. Calibrate per room with `guard calibrate`.
+    min_area_pct: float = 3.0
+    # Two frames at the measured ~7 fps is under 300 ms of confirmation. Three cost half a second
+    # and lost people who only crossed the doorway.
+    min_motion_frames: int = 2
     global_change_pct: float = 70.0
     blur_kernel: int = 21
     analysis_width: int = 640
