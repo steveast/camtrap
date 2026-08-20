@@ -115,6 +115,9 @@ class SoundConfig:
     warn_cooldown_sec: float = 120.0
     warn_max_per_hour: int = 10
     warn_on_light: bool = False
+    # Upper bound on how long the whole warning may take; also the kill timeout for a hung
+    # player process. Two rendered languages are ~12 s together, so 30 s is generous.
+    warn_timeout_sec: float = 30.0
     # Shared.
     delay_max_sec: float = 3.0
     hold_poll_ms: int = 250

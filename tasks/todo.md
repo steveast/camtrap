@@ -32,11 +32,11 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 - [x] **S1.1** `tamper.py` — poll `ADP1/online`, both `ucsi-source-psy-USBC000:00{1,2}/online`, and
       `LID0/state` every `TAMPER_POLL_SEC`; debounce so a 1→0→1 bounce is one event. *Done when* fake
       sysfs tests pass: 1→0 fires, 0→1 does not, bounce fires exactly once.
-- [ ] **S1.2** `player.py` — `pw-play` with timeout; explicit `SOUND_SINK`; switch card to a profile
+- [x] **S1.2** `player.py` — `pw-play` with timeout; explicit `SOUND_SINK`; switch card to a profile
       with a `Speaker` port; unmute; `SOUND_VOLUME_PCT`; `Auto-Mute Mode` off; `SIREN_SEC`. *Done
       when* `camtrap siren-test` plays through the built-in speakers **while the default sink is the
       USB dongle**.
-- [ ] **S1.3** Hold layer — re-assert the audio path every `SOUND_HOLD_POLL_MS = 250`
+- [x] **S1.3** Hold layer — re-assert the audio path every `SOUND_HOLD_POLL_MS = 250`
       (unmute + volume + profile + auto-mute). *Done when* mute and volume-down pressed mid-burst are
       reverted within one tick, and a headphone jack plugged mid-burst does not silence the speakers.
 - [ ] **S1.4** Hold layer — `loginctl lock-session` on tamper (config flag to disable while
@@ -47,9 +47,9 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
       polling, `ARM_EXIT_DELAY_SEC = 60`, `GRACE_AFTER_UNLOCK_SEC = 300`, `camtrap arm` / `disarm`.
       *Done when* an unlocked session stays silent on a cable pull, and unlocking mid-burst stops the
       siren and suppresses tamper for the grace window.
-- [ ] **S1.6** Limits — cooldown, `SOUND_MAX_PER_EVENT`, `SOUND_MAX_PER_HOUR`, no play during warm-up
+- [x] **S1.6** Limits — cooldown, `SOUND_MAX_PER_EVENT`, `SOUND_MAX_PER_HOUR`, no play during warm-up
       or `paused`. *Done when* limit tests pass against a fake player.
-- [ ] **S1.9** Stage 1 plumbing in `player.py` — two stages sharing one audio path: `WARN_LANGS`
+- [x] **S1.9** Stage 1 plumbing in `player.py` — two stages sharing one audio path: `WARN_LANGS`
       ordered playback, `WARN_VOLUME_PCT = 85`, `WARN_COOLDOWN_SEC = 120`, `WARN_MAX_PER_HOUR`, and a
       `tamper` mid-warning cuts the warning off and starts the siren. **No session lock and no input
       grab on stage 1.** *Done when* tests prove `motion` → warning only, `tamper` → siren only,

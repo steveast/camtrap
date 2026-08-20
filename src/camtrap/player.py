@@ -1,0 +1,363 @@
+"""The audible response: a spoken warning on motion, a police siren on tamper.
+
+Spec 3.4. Three rules shape this module:
+
+* **The sink is explicit.** "Play to the default sink" is a bug on the target machine, where the
+  default is a USB dongle that will not be in the hotel room and the card's active profile routes
+  to headphones. The agent switches to a profile with a Speaker port and plays there.
+* **A sound that a mute key silences is not a sound.** While anything plays, the whole audio path
+  is re-asserted every `hold_poll_ms`.
+* **Stage 1 is a notice, stage 2 is an alarm.** Motion gets the voice at 85 %; tampering gets the
+  siren at 100 %, plus a session lock. Stage 1 never locks anything.
+"""
+
+from __future__ import annotations
+
+import shlex
+import subprocess
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Protocol
+
+from . import log
+from .config import Config
+
+
+class Stage(Enum):
+    WARNING = "warning"
+    SIREN = "siren"
+
+
+class _Proc(Protocol):
+    def poll(self) -> int | None: ...
+    def kill(self) -> None: ...
+    def wait(self, timeout: float | None = None) -> int: ...
+
+
+@dataclass
+class Result:
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+
+
+Runner = Callable[..., object]
+Spawn = Callable[[list[str], float], _Proc]
+Gate = Callable[[Stage, float], tuple[bool, str]]
+AckWaiter = Callable[[float], bool]
+
+
+@dataclass
+class PlayCall:
+    path: str
+    lang: str = ""
+
+
+@dataclass
+class Played:
+    stage: Stage | None = None
+    played: bool = False
+    reason: str = ""
+    calls: list[PlayCall] = field(default_factory=list)
+    evidence_confirmed: bool = False
+
+
+def _default_runner(cmd: list[str], *, timeout: float | None = None):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _default_spawn(argv: list[str], duration: float) -> _Proc:
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class AudioPath:
+    """Finds and forces the built-in speakers: profile, sink, mute, volume, auto-mute."""
+
+    def __init__(self, cfg: Config, runner: Runner | None = None) -> None:
+        self.cfg = cfg
+        self._run = runner or _default_runner
+        self._sink: str | None = None
+        self._card: str | None = None
+
+    # --- discovery -----------------------------------------------------------
+
+    def _pactl(self, *args: str):
+        return self._run([*self.cfg.sound.pactl_cmd, *args])
+
+    def _find_card_and_profile(self) -> tuple[str | None, str | None]:
+        if self.cfg.sound.card:
+            return self.cfg.sound.card, None
+        result = self._pactl("list", "cards")
+        text = getattr(result, "stdout", "") or ""
+        card: str | None = None
+        best: tuple[str | None, str | None] = (None, None)
+        profiles: list[str] = []
+        has_speaker = False
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("Card #"):
+                if card and has_speaker:
+                    speaker_profiles = [p for p in profiles if "Speaker" in p]
+                    if speaker_profiles:
+                        return card, speaker_profiles[0]
+                card, profiles, has_speaker = None, [], False
+            elif line.startswith("Name: "):
+                card = line.removeprefix("Name: ").strip()
+            elif line.startswith("[Out] Speaker"):
+                has_speaker = True
+            elif ": sinks:" in line or (":" in line and "priority" in line and "(" in line):
+                profiles.append(line.split(":")[0].strip())
+        if card and has_speaker:
+            speaker_profiles = [p for p in profiles if "Speaker" in p]
+            if speaker_profiles:
+                return card, speaker_profiles[0]
+        return best
+
+    def _find_sink(self) -> str | None:
+        if self.cfg.sound.sink:
+            return self.cfg.sound.sink
+        result = self._pactl("list", "short", "sinks")
+        text = getattr(result, "stdout", "") or ""
+        rows = [line.split("\t") for line in text.splitlines() if line.strip()]
+        names = [row[1] for row in rows if len(row) > 1]
+        for name in names:
+            if "Speaker" in name:
+                return name
+        # No speaker sink yet: fall back to a non-USB analog output rather than the dongle.
+        for name in names:
+            if "usb-" not in name and "hdmi" not in name.lower():
+                return name
+        return names[0] if names else None
+
+    # --- forcing -------------------------------------------------------------
+
+    def prepare(self, *, volume_pct: int) -> str | None:
+        card, profile = self._find_card_and_profile()
+        if card and profile:
+            self._pactl("set-card-profile", card, profile)
+            self._card = card
+        sink = self._find_sink()
+        self._sink = sink
+        if sink:
+            self.reassert(volume_pct=volume_pct)
+        else:
+            log.emit("sound_error", reason="no sink found")
+        return sink
+
+    def reassert(self, *, volume_pct: int) -> None:
+        """Undo whatever a keypress just did: unmute, restore volume, keep speakers routed."""
+        if not self._sink:
+            return
+        self._pactl("set-sink-mute", self._sink, "0")
+        self._pactl("set-sink-volume", self._sink, f"{volume_pct}%")
+        self._disable_auto_mute()
+
+    def _disable_auto_mute(self) -> None:
+        # ALSA control: with Auto-Mute enabled, a plugged jack silences the speakers.
+        self._run(["amixer", "-q", "sset", "Auto-Mute Mode", "Disabled"])
+
+    @property
+    def sink(self) -> str | None:
+        return self._sink
+
+
+class SoundResponder:
+    """Decides which stage to play, enforces the limits, and holds the sound on."""
+
+    def __init__(
+        self,
+        cfg: Config,
+        *,
+        runner: Runner | None = None,
+        spawn: Spawn | None = None,
+        audio: AudioPath | None = None,
+    ) -> None:
+        self.cfg = cfg
+        self._run = runner or _default_runner
+        self._spawn = spawn or _default_spawn
+        self.audio = audio or AudioPath(cfg, runner=self._run)
+        self._gate: Gate = lambda stage, now: (True, "")
+        self._ack: AckWaiter | None = None
+        self._proc: _Proc | None = None
+        self._playing_stage: Stage | None = None
+        self._hold_last = 0.0
+        self._last_warn = float("-inf")
+        self._last_siren = float("-inf")
+        self._siren_this_event = 0
+        self._siren_times: deque[float] = deque()
+        self._warn_times: deque[float] = deque()
+
+    # --- wiring --------------------------------------------------------------
+
+    def set_gate(self, gate: Gate) -> None:
+        """Arming/pause/warm-up policy: returns (allowed, reason) per stage."""
+        self._gate = gate
+
+    def set_ack_waiter(self, waiter: AckWaiter | None) -> None:
+        """Evidence first: block up to delay_max_sec for the first frame to be acknowledged."""
+        self._ack = waiter
+
+    def end_event(self) -> None:
+        self._siren_this_event = 0
+
+    # --- stages --------------------------------------------------------------
+
+    def on_motion(self, *, now: float) -> Played:
+        return self._respond(Stage.WARNING, now=now, signals=[])
+
+    def on_tamper(self, signals: list[str], *, now: float) -> Played:
+        return self._respond(Stage.SIREN, now=now, signals=signals)
+
+    def _respond(self, stage: Stage, *, now: float, signals: list[str]) -> Played:
+        allowed, reason = self._gate(stage, now)
+        if not allowed:
+            log.emit("sound_skip", stage=stage.value, reason=reason or "gate")
+            return Played(stage=stage, played=False, reason=reason or "gate")
+
+        blocked = self._limit_reason(stage, now)
+        if blocked:
+            log.emit("sound_skip", stage=stage.value, reason=blocked)
+            return Played(stage=stage, played=False, reason=blocked)
+
+        paths = self._files(stage)
+        if paths is None:
+            log.emit("sound_error", stage=stage.value, reason="missing_file")
+            return Played(stage=stage, played=False, reason="missing_file")
+
+        confirmed = False
+        if self._ack is not None:
+            confirmed = bool(self._ack(self.cfg.sound.delay_max_sec))
+
+        if stage is Stage.SIREN:
+            self._stop_current(reason="preempted_by_siren")
+            if self.cfg.sound.lock_session_on_tamper:
+                self._run([*self.cfg.sound.loginctl_cmd, "lock-session"])
+
+        volume = (
+            self.cfg.sound.volume_pct if stage is Stage.SIREN else self.cfg.sound.warn_volume_pct
+        )
+        self.audio.prepare(volume_pct=volume)
+        self._play(paths, stage=stage, now=now)
+        self._record(stage, now)
+
+        log.emit(
+            "sound",
+            stage=stage.value,
+            files=len(paths),
+            volume=volume,
+            signals=",".join(signals) or "-",
+            evidence=confirmed,
+        )
+        return Played(stage=stage, played=True, calls=paths, evidence_confirmed=confirmed)
+
+    # --- playback ------------------------------------------------------------
+
+    def _files(self, stage: Stage) -> list[PlayCall] | None:
+        if stage is Stage.SIREN:
+            path = self.cfg.siren_path
+            return [PlayCall(str(path))] if path.exists() else None
+        calls: list[PlayCall] = []
+        for lang in self.cfg.sound.warn_langs:
+            path = self.cfg.warn_path(lang)
+            if not path.exists():
+                return None
+            calls.append(PlayCall(str(path), lang=lang))
+        return calls or None
+
+    def _play(self, calls: list[PlayCall], *, stage: Stage, now: float) -> None:
+        # The duration doubles as a kill timeout: a hung pw-play must not hold the stage.
+        duration = (
+            self.cfg.sound.siren_sec
+            if stage is Stage.SIREN
+            else self.cfg.sound.warn_timeout_sec
+        )
+        argv = list(self.cfg.sound.player_cmd)
+        sink = self.audio.sink
+        if sink:
+            argv += ["--target", sink]
+        argv += [call.path for call in calls]
+        self._proc = self._spawn(argv, duration)
+        self._playing_stage = stage
+        self._hold_last = now
+
+    def _stop_current(self, *, reason: str) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.kill()
+            stage = (self._playing_stage or Stage.WARNING).value
+            log.emit("sound_stop", stage=stage, reason=reason)
+        self._proc = None
+        self._playing_stage = None
+
+    def hold_tick(self, *, now: float) -> bool:
+        """Re-assert the audio path while a sound is playing. Returns True if it acted."""
+        if self._proc is None or self._playing_stage is None:
+            return False
+        if self._proc.poll() is not None:
+            self._proc = None
+            self._playing_stage = None
+            return False
+        if (now - self._hold_last) * 1000.0 < self.cfg.sound.hold_poll_ms:
+            return False
+        volume = (
+            self.cfg.sound.volume_pct
+            if self._playing_stage is Stage.SIREN
+            else self.cfg.sound.warn_volume_pct
+        )
+        self.audio.reassert(volume_pct=volume)
+        self._hold_last = now
+        return True
+
+    # --- limits --------------------------------------------------------------
+
+    def _limit_reason(self, stage: Stage, now: float) -> str:
+        if stage is Stage.SIREN:
+            if now - self._last_siren < self.cfg.sound.cooldown_sec:
+                return "cooldown"
+            if self._siren_this_event >= self.cfg.sound.max_per_event:
+                return "max_per_event"
+            if self._within_hour(self._siren_times, now) >= self.cfg.sound.max_per_hour:
+                return "max_per_hour"
+            return ""
+        if now - self._last_warn < self.cfg.sound.warn_cooldown_sec:
+            return "cooldown"
+        if self._within_hour(self._warn_times, now) >= self.cfg.sound.warn_max_per_hour:
+            return "max_per_hour"
+        return ""
+
+    @staticmethod
+    def _within_hour(times: deque[float], now: float) -> int:
+        while times and now - times[0] > 3600.0:
+            times.popleft()
+        return len(times)
+
+    def _record(self, stage: Stage, now: float) -> None:
+        if stage is Stage.SIREN:
+            self._last_siren = now
+            self._siren_this_event += 1
+            self._siren_times.append(now)
+        else:
+            self._last_warn = now
+            self._warn_times.append(now)
+
+    # --- diagnostics ---------------------------------------------------------
+
+    def describe_command(self, stage: Stage) -> str:
+        calls = self._files(stage) or []
+        argv = list(self.cfg.sound.player_cmd)
+        if self.audio.sink:
+            argv += ["--target", self.audio.sink]
+        argv += [call.path for call in calls]
+        return shlex.join(argv)
+
+    @property
+    def playing(self) -> Stage | None:
+        if self._proc is not None and self._proc.poll() is None:
+            return self._playing_stage
+        return None
+
+
+def siren_path_missing(cfg: Config) -> bool:
+    return not Path(cfg.siren_path).exists()
