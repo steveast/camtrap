@@ -1,5 +1,7 @@
 """S1: the loop that turns a tamper signal into sound (plan S1, checkpoint 1 in code form)."""
 
+from pathlib import Path
+
 import pytest
 from tests.fakes import FakeProcess, FakeRunner
 
@@ -185,8 +187,11 @@ def test_motion_writes_frames_and_a_manifest(framed):
         frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
         runner.on_frame(frame, now=70.0 + index * 0.2)
     runner.on_frame(blank(), now=200.0)  # past the gap: closes the event
-    manifests = list(runner.cfg.spool_dir.glob("evt_*.json"))
-    frames = list(runner.cfg.spool_dir.glob("evt_*.jpg"))
+    # Artefacts may already have been drained to the receiver, so look in both places: what
+    # matters is that they exist somewhere, not that they are still queued.
+    inbox = Path(runner.cfg.upload.local_inbox)
+    manifests = list(runner.cfg.spool_dir.glob("evt_*.json")) + list(inbox.glob("evt_*.json"))
+    frames = list(runner.cfg.spool_dir.glob("evt_*.jpg")) + list(inbox.glob("evt_*.jpg"))
     assert manifests and frames
     assert runner.stats.motion_events >= 1
 

@@ -1,0 +1,176 @@
+#!/bin/sh
+# camtrap poller — runs on the Pi at home, from cron, every 2 minutes.
+#
+# The token lives here and nowhere else. Frames stay on the VPS: this script asks the VPS to send
+# them, so the picture crosses the network once. Discipline copied from the external prober:
+#   - state mutates only AFTER a successful send, so a failed send is a retry, not a lost event
+#   - a new failure alerts once, repeats every REPEAT_SEC while it lasts, then recovers with a green
+#   - one story per situation: "handled then went silent" is one message, not two alarms
+set -eu
+
+CONF="${CAMTRAP_POLL_ENV:-/etc/camtrap-poll.env}"
+[ -f "$CONF" ] && . "$CONF"
+
+: "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN missing}"
+: "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID missing}"
+: "${CAMTRAP_SSH:?CAMTRAP_SSH missing (e.g. \"ssh -i /home/piuser/.ssh/camtrap-pi user@vps\")}"
+
+STATE_DIR="${CAMTRAP_STATE_DIR:-/var/lib/camtrap-poll}"
+HB_STALE_SEC="${HB_STALE_SEC:-300}"
+REPEAT_SEC="${REPEAT_SEC:-1800}"
+TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
+TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
+
+mkdir -p "$STATE_DIR"
+
+log() { logger -t camtrap-poll "$*" 2>/dev/null || echo "camtrap-poll $*" >&2; }
+
+remote() { # shellcheck disable=SC2086
+    ${CAMTRAP_SSH} "$@"
+}
+
+send_message() {
+    printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$1" | remote send-message
+}
+
+send_photo() {
+    printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$2" | remote "send-photo $1"
+}
+
+local_time() {
+    TZ="$TZ_LOCAL" date -d "@$1" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null ||
+        TZ="$TZ_LOCAL" date '+%Y-%m-%d %H:%M:%S %Z'
+}
+
+# --- failure bookkeeping: alert once, repeat while broken, recover green ------------------------
+
+note_failure() { # check, message
+    check=$1
+    message=$2
+    marker="$STATE_DIR/fail-$check"
+    now=$(date -u +%s)
+    if [ -f "$marker" ]; then
+        last=$(cut -d' ' -f2 "$marker" 2>/dev/null || echo 0)
+        [ $((now - last)) -ge "$REPEAT_SEC" ] || return 0
+    fi
+    if send_message "$message"; then
+        printf '%s %s\n' "$now" "$now" > "$marker"
+        log "alert check=$check state=down"
+    else
+        log "alert_failed check=$check"
+    fi
+}
+
+note_recovery() { # check, message
+    check=$1
+    message=$2
+    marker="$STATE_DIR/fail-$check"
+    [ -f "$marker" ] || return 0
+    if send_message "$message"; then
+        rm -f "$marker"
+        log "alert check=$check state=up"
+    else
+        log "recovery_failed check=$check"
+    fi
+}
+
+# --- events ------------------------------------------------------------------------------------
+
+listing=$(remote list || true)
+state=$(remote state || true)
+
+hb_age=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "hb_age" {print $2}' | tail -1)
+hb_mode=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "mode" {print $2}' | tail -1)
+hb_sound=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "sound_ok" {print $2}' | tail -1)
+: "${hb_age:=-1}"
+: "${hb_mode:=unknown}"
+: "${hb_sound:=1}"
+
+# Event ids present remotely, tamper first: the owner reacts differently to "someone came in"
+# and to "the laptop is in someone's hands".
+events=$(printf '%s\n' "$listing" | awk '{print $1}' | sed -n 's/^\(evt_[0-9TZ]*\).*/\1/p' | sort -u)
+
+tamper_seen=0
+for event in $events; do
+    [ -n "$event" ] || continue
+    [ -f "$STATE_DIR/sent-$event" ] && continue
+
+    manifest=""
+    if printf '%s\n' "$listing" | grep -q "^$event.json "; then
+        manifest=$(remote "manifest $event.json" 2>/dev/null || true)
+    fi
+
+    type=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"type":"\([a-z]*\)".*/\1/p')
+    frames=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"frames":\([0-9]*\).*/\1/p')
+    signals=$(printf '%s' "$manifest" | tr -d ' \n' |
+        sed -n 's/.*"signals":\[\([^]]*\)\].*/\1/p' | tr -d '"')
+    sound=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"sound_stage":"\([a-z]*\)".*/\1/p')
+    : "${type:=motion}"
+    : "${frames:=1}"
+
+    stamp=$(printf '%s\n' "$listing" | awk -v e="$event" '$1 ~ "^"e {print int($3); exit}')
+    : "${stamp:=$(date -u +%s)}"
+    when=$(local_time "$stamp")
+
+    case "$type" in
+        tamper)
+            tamper_seen=1
+            icon="🚨"
+            headline="the laptop is being handled"
+            ;;
+        light) icon="💡"; headline="light switched on" ;;
+        *) icon="📷"; headline="movement in the room" ;;
+    esac
+
+    caption="$icon $headline
+time: $when
+type: $type${signals:+
+signals: $signals}
+frames: $frames${sound:+
+sound: $sound}"
+
+    first="${event}_000.jpg"
+    if printf '%s\n' "$listing" | grep -q "^$first "; then
+        if send_photo "$first" "$caption"; then
+            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
+            [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
+            log "event id=$event type=$type frames=$frames sent=1"
+        else
+            log "event id=$event type=$type sent=0"
+            continue
+        fi
+    else
+        if send_message "$caption"; then
+            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
+            log "event id=$event type=$type sent=1 photo=0"
+        fi
+    fi
+done
+
+# --- heartbeat ---------------------------------------------------------------------------------
+
+now=$(date -u +%s)
+last_tamper=0
+[ -f "$STATE_DIR/last-tamper" ] && last_tamper=$(cat "$STATE_DIR/last-tamper")
+
+if [ "$hb_age" -lt 0 ]; then
+    note_failure hb "🔴 camtrap: no heartbeat on the receiver at all"
+elif [ "$hb_age" -gt "$HB_STALE_SEC" ] && [ "$hb_mode" != "paused" ]; then
+    silence_since=$((now - hb_age))
+    if [ "$last_tamper" -gt 0 ] && [ $((now - last_tamper)) -le "$TAMPER_LINK_SEC" ]; then
+        # One story with two cut-offs, not two separate alarms about the same minute.
+        note_failure hb "🚨 camtrap: handled at $(local_time "$last_tamper"), then went silent at $(local_time "$silence_since")"
+    else
+        note_failure hb "🔴 camtrap: agent went silent at $(local_time "$silence_since") (mode=$hb_mode)"
+    fi
+else
+    note_recovery hb "🟢 camtrap: heartbeat is back (age ${hb_age}s)"
+fi
+
+if [ "$hb_mode" = "armed" ] && [ "$hb_sound" = "0" ]; then
+    note_failure sound "🔴 camtrap: the siren will not fire — sound_ok=0 on the agent"
+else
+    note_recovery sound "🟢 camtrap: sound is ready again"
+fi
+
+log "tick hb_age=$hb_age mode=$hb_mode sound_ok=$hb_sound events=$(printf '%s\n' "$events" | grep -c . || true) tamper=$tamper_seen"

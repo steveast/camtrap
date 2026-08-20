@@ -1,0 +1,4 @@
+# camtrap poller — its own cron file, deliberately not mixed into anyone else's.
+# Install as /etc/cron.d/camtrap-poll (root:root 644). Runs as the unprivileged user that owns
+# the token file, every 2 minutes (spec section 10, item 3 keeps the interval open).
+*/2 * * * * piuser /usr/local/bin/camtrap-poll.sh

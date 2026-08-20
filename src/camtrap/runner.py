@@ -21,10 +21,13 @@ from .camera import Camera
 from .config import Config
 from .detector import Detector, EventKind
 from .event import EventWriter
+from .heartbeat import HeartbeatSender
+from .heartbeat import build as build_heartbeat
 from .inhibit import Inhibitor
 from .player import SoundResponder, Stage
 from .spool import Spool
 from .state import read_mode
+from .uploader import Uploader
 
 
 @dataclass
@@ -54,6 +57,7 @@ class Runner:
         events: EventWriter | None = None,
         spool: Spool | None = None,
         camera: Camera | None = None,
+        uploader: Uploader | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
@@ -63,7 +67,10 @@ class Runner:
         self.detector = detector if detector is not None else Detector(cfg)
         self.events = events if events is not None else EventWriter(cfg)
         self.spool = spool if spool is not None else Spool(cfg)
+        self.uploader = uploader if uploader is not None else Uploader(cfg, self.spool)
+        self.heartbeat = HeartbeatSender(cfg, self.uploader)
         self.camera = camera
+        self.started = 0.0
         self.inhibitor = inhibitor
         self.clock = clock
         self.stats = LoopStats()
@@ -75,13 +82,14 @@ class Runner:
         self._stop = True
 
     def step(self, now: float) -> list[tamper_mod.Signal]:
-        """One iteration: arming state, tamper poll, sound, hold."""
+        """One iteration: arming state, tamper poll, sound, hold, then network work."""
         self.arming.poll(now=now)
         self.responder.hold_tick(now=now)
         signals = self.monitor.poll(now=now)
         self.stats.ticks += 1
         if signals:
             self._tamper(signals, now=now)
+        self._housekeeping(now)
         return signals
 
     def motion(self, now: float) -> None:
@@ -143,6 +151,23 @@ class Runner:
             )
 
     def _housekeeping(self, now: float) -> None:
+        # Uploading and heartbeats run from here so the capture path never blocks on the network:
+        # a sagging link must not slow the camera down (spec 3.5).
+        self.uploader.drain(now=now, limit=8)
+        if self.heartbeat.due(now=now):
+            self.heartbeat.maybe_send(
+                build_heartbeat(
+                    self.cfg,
+                    started=self.started,
+                    now=now,
+                    stats=self.stats,
+                    monitor=self.monitor,
+                    arming=self.arming,
+                    spool=self.spool,
+                    camera=self.camera,
+                ),
+                now=now,
+            )
         if now - self._last_housekeeping < 60.0:
             return
         self._last_housekeeping = now
@@ -153,6 +178,7 @@ class Runner:
         signal.signal(signal.SIGTERM, self.request_stop)
         signal.signal(signal.SIGINT, self.request_stop)
         started = self.clock()
+        self.started = started
         self.arming.start(now=started)
         log.emit(
             "start",
@@ -194,7 +220,8 @@ def run_forever(cfg: Config) -> int:
             log.emit("warn", reason="no sleep inhibitor: a closed lid may suspend the machine")
         camera = Camera(cfg)
         runner = Runner(cfg, inhibitor=inhibitor, camera=camera)
-        runner.arming.start(now=runner.clock())
+        runner.started = runner.clock()
+        runner.arming.start(now=runner.started)
         log.emit(
             "start",
             mode=read_mode(cfg.root).name,

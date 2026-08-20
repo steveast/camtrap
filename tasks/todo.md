@@ -117,15 +117,15 @@ here on every detector mistake is audible in the corridor.
 
 ## S4 · Alert with photo in Telegram (6 h, deps: S3)
 
-- [ ] **S4.1** `heartbeat.py` — every `HEARTBEAT_SEC`: timestamp, version, uptime, camera, spool
+- [x] **S4.1** `heartbeat.py` — every `HEARTBEAT_SEC`: timestamp, version, uptime, camera, spool
       depth, event count, mode, `ac_online`, lid, `sound_ok`, last siren time.
-- [ ] **S4.2** `deploy/prod/camtrap-tg.sh` — `sendPhoto`/`sendMessage`, token from stdin, never
+- [x] **S4.2** `deploy/prod/camtrap-tg.sh` — `sendPhoto`/`sendMessage`, token from stdin, never
       stored. *Done when* `sh -n` passes and a run against a local HTTP stub posts multipart.
-- [ ] **S4.3** `deploy/pi/camtrap-poll.sh` + `.cron` — events → Telegram, 🚨 `tamper` as its own
+- [x] **S4.3** `deploy/pi/camtrap-poll.sh` + `.cron` — events → Telegram, 🚨 `tamper` as its own
       message ahead of the queue, `sound_ok = false` → 🔴, `HB_STALE_SEC`, `REPEAT_SEC`, state mutated
       only after a successful send. *Done when* a failed send leaves state unmutated and retries next
       tick.
-- [ ] **S4.4** Merge "handled → went silent" into one message with two cut-off times; `paused`
+- [x] **S4.4** Merge "handled → went silent" into one message with two cut-off times; `paused`
       suppresses the silence alert.
 
 **→ CHECKPOINT 3.** Owner reads `recv.sh`, `tg.sh`, `poll.sh`; then I ask permission for the boxes —
@@ -140,7 +140,7 @@ new ssh keys, install, cron (spec §8). Deployment order: receiver → sender �
       → `light`, smeared frame → `tamper`.
 - [x] **S5.2** ALS arbiter on `in_illuminance_raw` of both sensors, including the case where it
       contradicts the correlation.
-- [ ] **S5.3** Live: lifting the laptop without touching the cable sounds the siren; switching the
+- [x] **S5.3** Live: lifting the laptop without touching the cable sounds the siren; switching the
       room light gives `light` and **no** siren.
 
 ---
