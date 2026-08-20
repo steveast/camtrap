@@ -12,18 +12,18 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 
 ## S0 · Skeleton — `camtrap status` prints real state (1.5 h, no deps)
 
-- [ ] **S0.1** `pyproject.toml` + `requirements.txt`, venv, install `opencv-python-headless`,
+- [x] **S0.1** `pyproject.toml` + `requirements.txt`, venv, install `opencv-python-headless`,
       `pytest`, `ruff` — none are present yet, `cv2` import currently fails and `ruff` is absent
       system-wide. *Done when* `.venv/bin/python -c "import cv2"` and `.venv/bin/ruff --version` both
       succeed.
-- [ ] **S0.2** `src/camtrap/config.py` — in-code defaults overridden by
+- [x] **S0.2** `src/camtrap/config.py` — in-code defaults overridden by
       `~/.config/camtrap/config.toml`; every threshold from spec §3; **every sysfs and command path
       injectable** so tests can point them at `tmp_path`. *Done when* a test overrides a path and no
       real sysfs is touched.
-- [ ] **S0.3** `src/camtrap/cli.py` + structured stdout logging (`journalctl -t camtrap` style, one
+- [x] **S0.3** `src/camtrap/cli.py` + structured stdout logging (`journalctl -t camtrap` style, one
       line per tick with key fields). *Done when* `camtrap status` prints mode, arming state, spool
       depth, thresholds and resolved paths.
-- [ ] **S0.4** Gate: `ruff check src tests`, `ruff format --check`, `pytest -q`.
+- [x] **S0.4** Gate: `ruff check src tests`, `ruff format --check`, `pytest -q`.
 
 ---
 

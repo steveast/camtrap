@@ -24,3 +24,4 @@ config.toml
 # deployment specifics: hotel, dates, box addresses, key names
 TRIP.local.md
 *.local.md
+.venv/
