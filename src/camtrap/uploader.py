@@ -155,18 +155,51 @@ class LocalSink:
 
 
 class MegaSink:
-    """Copy into the cloud sync folder. Never acknowledges — a cp is not a delivery."""
+    """Copy into the cloud sync folder. Never acknowledges — a cp is not a delivery.
+
+    Frames are recompressed on the way in. This copy is a warehouse: its job is to hold a complete
+    event when the receiver is unreachable, and it syncs over whatever wifi the hotel has. The
+    evidence-grade original — the one that might be shown to police — stays on the receiver and in
+    the spool, untouched. Manifests are copied verbatim; they are a few hundred bytes.
+    """
 
     name = "mega"
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
 
+    def _recompress(self, path: Path, target: Path) -> bool:
+        """Downscale and re-encode one frame; False if OpenCV could not read it."""
+        import cv2  # local: delivery should not pay for OpenCV when this sink is unused
+
+        frame = cv2.imread(str(path))
+        if frame is None:
+            return False
+        height, width = frame.shape[:2]
+        wanted = self.cfg.upload.mega_width
+        if width > wanted:
+            scale = wanted / width
+            frame = cv2.resize(frame, (wanted, int(height * scale)), interpolation=cv2.INTER_AREA)
+        params = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.upload.mega_quality]
+        return bool(cv2.imwrite(str(target), frame, params))
+
     def send(self, path: Path) -> SinkResult:
         target_dir = self.cfg.mega_dir
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target_dir / path.name)
+            target = target_dir / path.name
+            if target.resolve() == path.resolve():
+                # Misconfiguration: the cloud folder points at the spool. Recompressing in place
+                # would destroy the original, and copyfile would raise SameFileError, which is not
+                # an OSError and would escape the handler below.
+                return SinkResult(False, "mega_dir is the spool directory")
+            recompress = self.cfg.upload.mega_recompress and path.suffix.lower() in (
+                ".jpg",
+                ".jpeg",
+            )
+            if recompress and self._recompress(path, target):
+                return SinkResult(True, "copied (recompressed)", acknowledged=False)
+            shutil.copyfile(path, target)
         except OSError as exc:
             return SinkResult(False, f"copy failed: {exc}")
         return SinkResult(True, "copied", acknowledged=False)

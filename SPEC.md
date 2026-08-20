@@ -189,7 +189,10 @@ and the siren does not depend on the network at all.
 
 ### 3.1 Detector (laptop)
 
-- Capture from `/dev/video0` through OpenCV V4L2, 1280×720, 5 fps.
+- Capture from `/dev/video0` through OpenCV V4L2, **1920×1080** at JPEG quality 95, 5 fps.
+  Measured on the target camera: 1080p runs at the same rate as 720p (8.3 fps either way — the
+  limit is exposure in room light, not resolution), and the frame may end up in front of an
+  investigator looking at a face. 283 KB per frame.
 - MOG2 background subtraction on greyscale with Gaussian blur; motion means the share of
   changed pixels stays above `MIN_AREA_PCT` for `MIN_MOTION_FRAMES` consecutive frames.
 - **Warm-up** `WARMUP_SEC = 20`: the background adapts and no events are produced. The same
@@ -417,7 +420,11 @@ camera down.
 - Directory `~/.local/share/camtrap/spool/`.
 - There are two receivers, independent and configured as a list:
   - `prod` — ssh forced command, delivery acknowledged by the receiver;
-  - `mega` — a copy into `~/MEGA/camtrap/`, best effort.
+  - `mega` — a recompressed copy into `~/MEGA/camtrap/`, best effort. 1280x720 at quality 75
+    instead of the captured 1920x1080 at 95: this copy is a warehouse for the case where the
+    receiver is unreachable, and it syncs over hotel wifi. Measured on a real frame: 65 KB against
+    288 KB, so a 60-frame event costs 3.8 MB in the cloud against 16.9 MB on the receiver. The
+    evidence-grade original never leaves the receiver and the spool.
 - **A frame leaves the spool only after `prod` acknowledges it.** Otherwise the very frame the
   whole thing exists for disappears together with the laptop. The cloud copy does not count as
   an acknowledgement: a successful `cp` only means the file landed in a sync folder, not that it

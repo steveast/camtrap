@@ -217,6 +217,13 @@ class UploadConfig:
     # Test/offline transport: a local directory standing in for the receiver.
     local_inbox: str = ""
     mega_dir: str = ""  # empty => ~/MEGA/camtrap
+    # The cloud copy is a warehouse, not the evidence: it exists so a full event survives if the
+    # receiver is unreachable. Recompressing to 720p/q75 turns a 17 MB event into ~4 MB, which
+    # matters because that folder syncs over hotel wifi. Originals stay on the receiver and in
+    # the spool untouched; manifests are copied verbatim.
+    mega_recompress: bool = True
+    mega_width: int = 1280
+    mega_quality: int = 75
     heartbeat_sec: float = 60.0
 
 

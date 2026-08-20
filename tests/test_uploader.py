@@ -322,3 +322,79 @@ def test_no_control_path_when_multiplexing_is_disabled(cfg):
     ssh = FakeSsh(reply=b"")
     ProdSink(cfg, runner=ssh).send(path)
     assert "ControlPath" not in " ".join(ssh.calls[0][0])
+
+
+# --- the cloud copy is a warehouse, not the evidence ------------------------------------------
+
+
+def _real_jpeg(path, width=1920, height=1080, quality=95):
+    import cv2
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    frame = rng.integers(0, 255, size=(height, width, 3), dtype=np.uint8)
+    cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    return path
+
+
+def test_the_cloud_copy_is_recompressed(cfg):
+    """17 MB an event over hotel wifi is not a warehouse, it is a bottleneck."""
+    import cv2
+
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    source = _real_jpeg(cfg.spool_dir / "evt_A_000.jpg")
+    original_bytes = source.stat().st_size
+
+    assert MegaSink(cfg).send(source).ok
+    copy = cfg.mega_dir / "evt_A_000.jpg"
+    assert copy.exists()
+    # Random-noise fixtures barely compress, so assert the geometry and that it did not grow.
+    assert cv2.imread(str(copy)).shape[1] == cfg.upload.mega_width
+    assert copy.stat().st_size <= original_bytes
+    # and the original is untouched
+    assert source.stat().st_size == original_bytes
+    assert cv2.imread(str(source)).shape[1] == 1920
+
+
+def test_a_cloud_folder_pointing_at_the_spool_is_refused(cfg):
+    """Recompressing in place would destroy the evidence-grade original."""
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    cfg.upload.mega_dir = str(cfg.spool_dir)
+    source = _real_jpeg(cfg.spool_dir / "evt_A_000.jpg")
+    before = source.stat().st_size
+    result = MegaSink(cfg).send(source)
+    assert not result.ok and "spool" in result.detail
+    assert source.stat().st_size == before
+
+
+def test_manifests_are_copied_verbatim(cfg):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    manifest = cfg.spool_dir / "evt_A.json"
+    manifest.write_text('{"type":"tamper"}')
+    assert MegaSink(cfg).send(manifest).ok
+    assert (cfg.mega_dir / "evt_A.json").read_text() == '{"type":"tamper"}'
+
+
+def test_recompression_can_be_switched_off(cfg):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    cfg.upload.mega_recompress = False
+    source = _real_jpeg(cfg.spool_dir / "evt_A_000.jpg")
+    MegaSink(cfg).send(source)
+    assert (cfg.mega_dir / "evt_A_000.jpg").stat().st_size == source.stat().st_size
+
+
+def test_an_unreadable_frame_still_gets_copied(cfg):
+    """Better a verbatim copy than no copy: this sink is the fallback for a dead receiver."""
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    broken = cfg.spool_dir / "evt_A_001.jpg"
+    broken.write_bytes(b"not really a jpeg")
+    assert MegaSink(cfg).send(broken).ok
+    assert (cfg.mega_dir / "evt_A_001.jpg").read_bytes() == b"not really a jpeg"
+
+
+def test_the_cloud_copy_still_never_acknowledges(cfg, spool):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    _real_jpeg(cfg.spool_dir / "evt_A_000.jpg")
+    report = Uploader(cfg, spool, sinks=[MegaSink(cfg)]).drain()
+    assert report.copied and not report.acknowledged
+    assert spool.depth() == 1

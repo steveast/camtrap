@@ -55,7 +55,7 @@ disarms it and opens a grace window, so picking the laptop up does not set off a
 ```
 laptop ──ssh forced-cmd──▶ VPS ◀──cron──── Pi at home ──▶ Telegram
    │     frames, heartbeat  inbox, state   token lives only here
-   ├──cp──▶ ~/MEGA/camtrap  (backup receiver, no alerts)
+   ├──cp──▶ ~/MEGA/camtrap  (backup warehouse, recompressed, no alerts)
    ├──motion in frame ────────────▶ 🔊 spoken warning, local language then English
    └──power / lid / frame shift ──▶ 🔊 police siren (local, no network involved)
 ```
