@@ -268,7 +268,7 @@ def run_forever(cfg: Config) -> int:
     return 0
 
 
-def audio_probe(cfg: Config) -> tuple[bool, str]:
+def audio_probe(cfg: Config, *, restore: bool = False) -> tuple[bool, str]:
     """Play a short, quiet burst to prove the path to the speakers actually carries audio.
 
     Checking that a file exists proves nothing: the sink can be gone, the profile wrong, the
@@ -280,9 +280,13 @@ def audio_probe(cfg: Config) -> tuple[bool, str]:
     path = AudioPath(cfg)
     sink = path.prepare(volume_pct=cfg.arming.audio_probe_volume_pct)
     if not sink:
+        if restore:
+            path.restore_profile()
         return False, "no sink"
     target = cfg.siren_path if cfg.siren_path.exists() else None
     if target is None:
+        if restore:
+            path.restore_profile()
         return False, "no siren file"
     argv = [*cfg.sound.player_cmd, "--target", sink, str(target)]
     try:
@@ -290,6 +294,9 @@ def audio_probe(cfg: Config) -> tuple[bool, str]:
     except OSError as exc:
         return False, str(exc)
     time.sleep(cfg.arming.audio_probe_sec)
+    # A check puts the card back where it found it; arming deliberately leaves it on the speakers.
+    if restore:
+        path.restore_profile()
     if proc.poll() is None:
         proc.terminate()
         try:
@@ -303,7 +310,9 @@ def audio_probe(cfg: Config) -> tuple[bool, str]:
     return True, sink
 
 
-def preflight(cfg: Config, *, probe: bool = True) -> tuple[bool, list[tuple[str, bool, str]]]:
+def preflight(
+    cfg: Config, *, probe: bool = True, restore_audio: bool = False
+) -> tuple[bool, list[tuple[str, bool, str]]]:
     """Everything that must hold before the owner walks out of the room.
 
     Returns (ready, rows). A False here is the whole point of the command: leaving with a trap
@@ -320,7 +329,7 @@ def preflight(cfg: Config, *, probe: bool = True) -> tuple[bool, list[tuple[str,
     rows.append(("sound files", not missing, ",".join(missing) if missing else "siren + warnings"))
 
     if probe:
-        ok, detail = audio_probe(cfg)
+        ok, detail = audio_probe(cfg, restore=restore_audio)
         rows.append(("speakers", ok, detail))
     else:
         rows.append(("speakers", True, "probe skipped"))
@@ -338,8 +347,26 @@ def preflight(cfg: Config, *, probe: bool = True) -> tuple[bool, list[tuple[str,
     return ready, rows
 
 
-def sound_selftest(cfg: Config, stage: Stage) -> int:
-    """Play one stage on the real speakers, forcing the audio path as an event would."""
+def sound_selftest(cfg: Config, stage: Stage, *, volume_pct: int | None = None) -> int:
+    """Play one stage on the real speakers, forcing the audio path as an event would.
+
+    volume_pct overrides the configured level for a rehearsal: the first test in a flat does not
+    need to be the full 100 %, and a quiet run still proves the whole path works.
+    """
+    missing = sounds.missing_sounds(cfg)
+    wanted = "siren" if stage is Stage.SIREN else "warn-"
+    blocking = [name for name in missing if name.startswith(wanted)]
+    if blocking:
+        # A machine-readable reason is not an answer for the person standing there.
+        print(f"nothing to play: {', '.join(blocking)} not generated yet")
+        print(f"  expected in {cfg.sounds_dir}")
+        print("  fix:  guard sounds        (or tools/make-siren.sh --mode yelp)")
+        log.emit("selftest", stage=stage.value, ok=False, reason="missing_file")
+        return 1
+
+    if volume_pct is not None:
+        cfg.sound.volume_pct = volume_pct
+        cfg.sound.warn_volume_pct = volume_pct
     responder = SoundResponder(cfg)
     responder.set_gate(lambda _stage, _now: (True, ""))
     now = time.monotonic()
@@ -356,5 +383,11 @@ def sound_selftest(cfg: Config, stage: Stage) -> int:
     while time.monotonic() < deadline and responder.playing is not None:
         responder.hold_tick(now=time.monotonic())
         time.sleep(cfg.sound.hold_poll_ms / 1000.0)
-    log.emit("selftest", stage=stage.value, ok=True, sink=responder.audio.sink or "-")
+    log.emit(
+        "selftest",
+        stage=stage.value,
+        ok=True,
+        sink=responder.audio.sink or "-",
+        volume=cfg.sound.volume_pct if stage is Stage.SIREN else cfg.sound.warn_volume_pct,
+    )
     return 0

@@ -59,7 +59,8 @@ def cmd_preflight(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Everything that must hold before walking out of the room."""
     from .runner import preflight
 
-    ready, rows = preflight(cfg, probe=not args.no_probe)
+    # A standalone check restores the audio profile; arming keeps the speakers.
+    ready, rows = preflight(cfg, probe=not args.no_probe, restore_audio=True)
     for name, ok, detail in rows:
         print(f"  [{'ok  ' if ok else 'FAIL'}] {name:12} {detail}")
     print()
@@ -107,13 +108,13 @@ def cmd_arm_and_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 def cmd_siren_test(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     from .runner import sound_selftest
 
-    return sound_selftest(cfg, Stage.SIREN)
+    return sound_selftest(cfg, Stage.SIREN, volume_pct=args.volume)
 
 
 def cmd_warn_test(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     from .runner import sound_selftest
 
-    return sound_selftest(cfg, Stage.WARNING)
+    return sound_selftest(cfg, Stage.WARNING, volume_pct=args.volume)
 
 
 def cmd_arm(cfg: config_mod.Config, args: argparse.Namespace) -> int:
@@ -283,9 +284,13 @@ def build_parser() -> argparse.ArgumentParser:
     guard.set_defaults(func=cmd_arm_and_run)
 
     siren_test = sub.add_parser("siren-test", help="play the siren into the configured sink")
+    siren_test.add_argument(
+        "--volume", type=int, default=None, help="override the volume, e.g. 30 for a rehearsal"
+    )
     siren_test.set_defaults(func=cmd_siren_test)
 
     warn_test = sub.add_parser("warn-test", help="play the spoken warning in every language")
+    warn_test.add_argument("--volume", type=int, default=None, help="override the volume")
     warn_test.set_defaults(func=cmd_warn_test)
 
     arm = sub.add_parser("arm", help="arm the alarm by hand")

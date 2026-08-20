@@ -37,7 +37,16 @@ case "${1:-arm}" in
         ;;
     status)  shift || true; run status "$@" ;;
     check)   shift || true; run preflight "$@" ;;
-    test)    run siren-test; run warn-test ;;
+    test)
+        # `guard test 30` rehearses at 30 % — the first run in a flat need not be full volume.
+        shift || true
+        if [ $# -gt 0 ]; then
+            run siren-test --volume "$1"; run warn-test --volume "$1"
+        else
+            echo "guard: playing at full volume — Ctrl+C to stop, or: guard test 30"
+            run siren-test; run warn-test
+        fi
+        ;;
     sounds)  "$REPO/tools/make-siren.sh" --mode "${SIREN_MODE:-yelp}"
              exec "$REPO/tools/make-warning.sh" --all ;;
     calibrate) shift || true; run calibrate "$@" ;;
@@ -52,7 +61,8 @@ guard — laptop camera trap
   guard off          stop and mark the offline as expected
   guard status       mode, arming state, spool, sound readiness
   guard check        preflight only: camera, sounds, speakers, receiver, no-sleep
-  guard test         play the siren and the spoken warning (loud)
+  guard test         play the siren and the warning at full volume
+  guard test 30      rehearse the same at 30 %
   guard sounds       regenerate siren.ogg and warn-*.ogg
   guard calibrate    measure this room's noise floor, recommend a threshold
   guard mask         capture a reference frame for the ignore mask

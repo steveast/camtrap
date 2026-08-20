@@ -20,14 +20,14 @@ def _rows(rows):
 
 
 def test_missing_sound_files_block_arming(cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg: (True, "fake"))
+    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "fake"))
     ready, rows = runner.preflight(cfg)
     assert not ready
     assert _rows(rows)["sound files"][0] is False
 
 
 def test_a_silent_audio_path_blocks_arming(ready_cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg: (False, "no sink"))
+    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (False, "no sink"))
     ready, rows = runner.preflight(ready_cfg)
     assert not ready
     assert _rows(rows)["speakers"] == (False, "no sink")
@@ -35,7 +35,7 @@ def test_a_silent_audio_path_blocks_arming(ready_cfg, monkeypatch):
 
 def test_a_missing_receiver_is_a_warning_not_a_blocker(ready_cfg, monkeypatch):
     """Frames still accumulate locally and the siren needs no network at all."""
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg: (True, "sink"))
+    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "sink"))
     from camtrap import selftest
 
     monkeypatch.setattr(
@@ -49,7 +49,7 @@ def test_a_missing_receiver_is_a_warning_not_a_blocker(ready_cfg, monkeypatch):
 
 
 def test_a_dead_camera_blocks_arming(ready_cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg: (True, "sink"))
+    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "sink"))
     ready_cfg.camera.device = "/nonexistent/video9"
     ready, rows = runner.preflight(ready_cfg)
     assert not ready
@@ -63,7 +63,9 @@ def test_probe_can_be_skipped(ready_cfg, monkeypatch):
         selftest, "check_camera", lambda cfg: selftest.Check("camera", selftest.OK, "1280x720")
     )
     called = []
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg: called.append(1) or (True, "x"))
+    monkeypatch.setattr(
+        runner, "audio_probe", lambda cfg, restore=False: called.append(1) or (True, "x")
+    )
     ready, rows = runner.preflight(ready_cfg, probe=False)
     assert ready and not called
     assert _rows(rows)["speakers"][1] == "probe skipped"
@@ -83,3 +85,21 @@ def test_audio_probe_reports_a_missing_siren_file(cfg, monkeypatch):
     monkeypatch.setattr(AudioPath, "prepare", lambda self, *, volume_pct: "sink")
     ok, detail = runner.audio_probe(cfg)
     assert not ok and "no siren file" in detail
+
+
+def test_a_standalone_check_puts_the_audio_profile_back(cfg, monkeypatch):
+    """`guard check` must not leave the card on the speakers; arming deliberately does."""
+    restored = []
+
+    from camtrap.player import AudioPath
+
+    monkeypatch.setattr(AudioPath, "prepare", lambda self, *, volume_pct: "sink")
+    monkeypatch.setattr(AudioPath, "restore_profile", lambda self: restored.append(1) or True)
+    cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
+    cfg.siren_path.write_bytes(b"siren")
+
+    runner.audio_probe(cfg, restore=True)
+    assert restored, "a check restores"
+    restored.clear()
+    runner.audio_probe(cfg, restore=False)
+    assert not restored, "arming keeps the speakers"
