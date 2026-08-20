@@ -31,6 +31,8 @@ class Summary:
     tamper_signals: Counter = field(default_factory=Counter)
     sirens: int = 0
     warnings: int = 0
+    would_sirens: int = 0
+    would_warnings: int = 0
     refusals: Counter = field(default_factory=Counter)
     holds: Counter = field(default_factory=Counter)
     drops: int = 0
@@ -43,6 +45,11 @@ class Summary:
     def noise(self) -> int:
         """Anything audible. In an empty room this must be zero."""
         return self.sirens + self.warnings
+
+    @property
+    def would_have_sounded(self) -> int:
+        """What an observation run suppressed. For an empty room this must be zero too."""
+        return self.would_sirens + self.would_warnings
 
 
 def summarise(lines: list[str]) -> Summary:
@@ -67,6 +74,11 @@ def summarise(lines: list[str]) -> Summary:
                 summary.sirens += 1
             else:
                 summary.warnings += 1
+        elif record == "sound_would_play":
+            if fields.get("stage") == "siren":
+                summary.would_sirens += 1
+            else:
+                summary.would_warnings += 1
         elif record == "sound_skip":
             summary.refusals[fields.get("reason", "?")] += 1
         elif record == "sound_hold":
@@ -105,6 +117,14 @@ def render(summary: Summary, *, source: str) -> str:
     lines.append(f"sirens played       {summary.sirens}")
     lines.append(f"warnings played     {summary.warnings}")
     lines.append(f"AUDIBLE TOTAL       {summary.noise}   <- must be 0 for an empty room")
+    if summary.would_have_sounded or summary.would_sirens or summary.would_warnings:
+        lines.append("")
+        lines.append("observation mode — suppressed, but would have sounded:")
+        lines.append(f"  sirens           {summary.would_sirens}")
+        lines.append(f"  warnings         {summary.would_warnings}")
+        lines.append(
+            f"  WOULD HAVE FIRED {summary.would_have_sounded}   <- must be 0 for an empty room"
+        )
     if summary.holds:
         lines.append("")
         lines.append("silencing attempts defeated")

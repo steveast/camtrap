@@ -140,6 +140,9 @@ class SoundConfig:
     lock_session_on_tamper: bool = True
     loginctl_cmd: list[str] = field(default_factory=lambda: ["loginctl"])
     grab_external_input: bool = False
+    # Observation mode: decide and log exactly as in a real run, but play nothing. This is how a
+    # false-positive test gets measured without a siren going off in an empty flat.
+    dry_run: bool = False
 
 
 @dataclass

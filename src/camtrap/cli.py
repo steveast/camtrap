@@ -55,6 +55,12 @@ def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return run_forever(cfg)
 
 
+def cmd_watch(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    from .runner import watch
+
+    return watch(cfg, minutes=args.minutes, still=args.still)
+
+
 def cmd_report(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     from pathlib import Path as _Path
 
@@ -294,6 +300,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="main mode (used by the systemd unit)")
     run.set_defaults(func=cmd_run)
+
+    watch_cmd = sub.add_parser("watch", help="empty-room run: real detection, sound suppressed")
+    watch_cmd.add_argument("--minutes", type=float, default=30.0, help="how long to observe")
+    watch_cmd.add_argument("--still", type=float, default=10.0, help="quiet seconds before arming")
+    watch_cmd.set_defaults(func=cmd_watch)
 
     report_cmd = sub.add_parser("report", help="summarise a run's log")
     report_cmd.add_argument("--log", default=None, help="path to the log file")

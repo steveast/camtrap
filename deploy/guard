@@ -54,6 +54,45 @@ case "${1:-arm}" in
     status)  shift || true; run status "$@" ;;
     check)   shift || true; run preflight "$@" ;;
     drill)   shift || true; run_logged drill "$@" ;;
+    watch)   shift || true; run_logged watch "$@" ;;
+
+    # --- Telegram, over the local relay: the real tg.sh and poll.sh, no ssh ------------------
+    tg-test)
+        # Sends one photo through the same code path the boxes will use.
+        TG_ENV="${CAMTRAP_TG_ENV:-$HOME/.config/camtrap/telegram.env}"
+        [ -f "$TG_ENV" ] || { echo "guard: create $TG_ENV (chmod 600) with:";             echo "  TELEGRAM_BOT_TOKEN=..."; echo "  TELEGRAM_CHAT_ID=..."; exit 1; }
+        # shellcheck disable=SC1090
+        . "$TG_ENV"
+        ROOT="${CAMTRAP_INBOX_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/receiver}"
+        mkdir -p "$ROOT/inbox" "$ROOT/state"
+        frame=$(ls -1t "$ROOT/inbox"/evt_*.jpg 2>/dev/null | head -1 || true)
+        if [ -z "$frame" ]; then
+            echo "guard: no frame in $ROOT/inbox yet — run a capture first (guard --still 10)"
+            exit 1
+        fi
+        printf '%s
+%s
+%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID"             "🧪 camtrap test — $(basename "$frame") at $(date '+%H:%M:%S')" |
+            CAMTRAP_ROOT="$ROOT" sh "$REPO/deploy/local-relay.sh" "send-photo $(basename "$frame")"
+        ;;
+    poll-loop)
+        # Stands in for the Pi's cron while testing on one machine.
+        shift || true
+        every="${1:-120}"
+        echo "guard: polling every ${every}s — Ctrl+C to stop"
+        while true; do
+            "$0" poll || echo "guard: poll tick failed (will retry)"
+            sleep "$every"
+        done
+        ;;
+    poll)
+        # One poller tick against the local receiver: events -> Telegram, heartbeat checks.
+        TG_ENV="${CAMTRAP_TG_ENV:-$HOME/.config/camtrap/telegram.env}"
+        [ -f "$TG_ENV" ] || { echo "guard: create $TG_ENV first (see: guard tg-test)"; exit 1; }
+        ROOT="${CAMTRAP_INBOX_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/receiver}"
+        mkdir -p "$ROOT/inbox" "$ROOT/state"
+        CAMTRAP_POLL_ENV="$TG_ENV"         CAMTRAP_SSH="env CAMTRAP_ROOT=$ROOT sh $REPO/deploy/local-relay.sh"         CAMTRAP_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/poll-state"         CAMTRAP_TZ="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"             sh "$REPO/deploy/pi/camtrap-poll.sh"
+        ;;
     test)
         # `guard test 30` rehearses at 30 % — the first run in a flat need not be full volume.
         shift || true
@@ -87,6 +126,7 @@ guard — laptop camera trap
   guard status       mode, arming state, spool, sound readiness
   guard check        preflight only: camera, sounds, speakers, receiver, no-sleep
   guard drill        rehearse cable/mute/lid at low volume, screen stays unlocked
+  guard watch [--minutes 30]  empty-room test: real detection, sound logged but silent
   guard test         play the siren and the warning at full volume
   guard test 30      rehearse the same at 30 %
   guard sounds       regenerate siren.ogg and warn-*.ogg
@@ -94,6 +134,9 @@ guard — laptop camera trap
   guard mask         capture a reference frame for the ignore mask
   guard logs [N]     the last N log lines (file for hand-started runs, journal for the unit)
   guard report       summarise a run: events, sirens, warnings, drops, what it refused and why
+  guard tg-test      send the newest captured frame to Telegram (checks the whole photo path)
+  guard poll         one poller tick: new events -> Telegram with photos, heartbeat checks
+  guard poll-loop [s]  keep polling every s seconds (stands in for the Pi's cron)
 
 Leaving:  run `guard`, take your things, walk out. It arms itself once the room is still.
 Coming back: unlock the screen — that disarms it. `guard off` when you are done for good.

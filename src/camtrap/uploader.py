@@ -131,8 +131,11 @@ class LocalSink:
     def heartbeat(self, line: str) -> SinkResult:
         if not self.available:
             return SinkResult(False, "sink unavailable")
-        self.inbox.mkdir(parents=True, exist_ok=True)
-        (self.inbox / "heartbeat").write_text(line)
+        # Mirror the receiver's layout: frames in inbox/, status in state/. The poller reads
+        # state/heartbeat, so writing it beside the frames would leave it invisible.
+        state = self.inbox.parent / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "heartbeat").write_text(line)
         return SinkResult(True, "stored")
 
 

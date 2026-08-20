@@ -88,6 +88,14 @@ def test_a_missing_cloud_folder_does_not_stop_delivery(cfg, spool, local, monkey
     assert spool.depth() == 0
 
 
+def test_local_sink_writes_the_heartbeat_where_the_poller_looks(cfg, local):
+    """Receiver layout: frames in inbox/, status in state/ — the poller reads state/heartbeat."""
+    assert local.heartbeat("mode=armed sound_ok=1\n").ok
+    inbox = Path(cfg.upload.local_inbox)
+    assert (inbox.parent / "state" / "heartbeat").exists()
+    assert not (inbox / "heartbeat").exists()
+
+
 def test_priority_order_is_respected(cfg, spool, local):
     _write(cfg, "evt_A_003.jpg")
     _write(cfg, "evt_A_000.jpg")

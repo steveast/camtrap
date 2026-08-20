@@ -63,6 +63,7 @@ class Played:
     reason: str = ""
     calls: list[PlayCall] = field(default_factory=list)
     evidence_confirmed: bool = False
+    dry_run: bool = False
 
 
 def _default_runner(cmd: list[str], *, timeout: float | None = None):
@@ -292,7 +293,7 @@ class SoundResponder:
         if self._ack is not None:
             confirmed = bool(self._ack(self.cfg.sound.delay_max_sec))
 
-        if stage is Stage.SIREN:
+        if stage is Stage.SIREN and not self.cfg.sound.dry_run:
             self._stop_current(reason="preempted_by_siren")
             if self.cfg.sound.lock_session_on_tamper:
                 self._run([*self.cfg.sound.loginctl_cmd, "lock-session"])
@@ -301,6 +302,22 @@ class SoundResponder:
         volume = (
             self.cfg.sound.volume_pct if stage is Stage.SIREN else self.cfg.sound.warn_volume_pct
         )
+
+        if self.cfg.sound.dry_run:
+            # Everything above ran for real — the gate, the limits, the file check — so the log
+            # records what a live run would have done, and the room stays quiet.
+            self._record(stage, now)
+            log.emit(
+                "sound_would_play",
+                stage=stage.value,
+                files=len(paths),
+                volume=volume,
+                signals=",".join(signals) or "-",
+            )
+            return Played(
+                stage=stage, played=True, calls=paths, evidence_confirmed=confirmed, dry_run=True
+            )
+
         self.audio.prepare(volume_pct=volume)
         self._play(paths, stage=stage, now=now)
         self._record(stage, now)
