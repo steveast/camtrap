@@ -29,7 +29,7 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 
 ## S1 · Siren on cable pull and lid close (6 h, deps: S0) ← the feature
 
-- [ ] **S1.1** `tamper.py` — poll `ADP1/online`, both `ucsi-source-psy-USBC000:00{1,2}/online`, and
+- [x] **S1.1** `tamper.py` — poll `ADP1/online`, both `ucsi-source-psy-USBC000:00{1,2}/online`, and
       `LID0/state` every `TAMPER_POLL_SEC`; debounce so a 1→0→1 bounce is one event. *Done when* fake
       sysfs tests pass: 1→0 fires, 0→1 does not, bounce fires exactly once.
 - [ ] **S1.2** `player.py` — `pw-play` with timeout; explicit `SOUND_SINK`; switch card to a profile
