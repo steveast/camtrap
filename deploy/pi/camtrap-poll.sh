@@ -19,6 +19,11 @@ STATE_DIR="${CAMTRAP_STATE_DIR:-/var/lib/camtrap-poll}"
 HB_STALE_SEC="${HB_STALE_SEC:-300}"
 REPEAT_SEC="${REPEAT_SEC:-1800}"
 TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
+# A curtain moving on a windy afternoon produces an event every few minutes. Photographing each
+# one into a private chat is how notifications get muted, so ordinary motion is capped and the
+# remainder arrives as one hourly summary. Tamper is never capped.
+MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-6}"
+SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
 mkdir -p "$STATE_DIR"
@@ -72,6 +77,33 @@ note_recovery() { # check, message
     else
         log "recovery_failed check=$check"
     fi
+}
+
+# --- motion alert budget -----------------------------------------------------------------------
+
+# One epoch per line, pruned to the last hour.
+motion_recent() {
+    now=$1
+    [ -f "$STATE_DIR/motion-alerts" ] || return 0
+    awk -v now="$now" '$1 > now - 3600 { print $1 }' "$STATE_DIR/motion-alerts"
+}
+
+motion_budget_left() {
+    now=$1
+    used=$(motion_recent "$now" | grep -c . || true)
+    [ "$used" -lt "$MOTION_ALERTS_PER_HOUR" ]
+}
+
+motion_note_sent() {
+    now=$1
+    { motion_recent "$now"; echo "$now"; } > "$STATE_DIR/motion-alerts.new"
+    mv "$STATE_DIR/motion-alerts.new" "$STATE_DIR/motion-alerts"
+}
+
+motion_note_suppressed() {
+    count=0
+    [ -f "$STATE_DIR/motion-suppressed" ] && count=$(cat "$STATE_DIR/motion-suppressed")
+    echo $((count + 1)) > "$STATE_DIR/motion-suppressed"
 }
 
 # --- events ------------------------------------------------------------------------------------
@@ -140,11 +172,21 @@ signals: $signals}
 frames: $frames${sound:+
 sound: $sound}$cut_short"
 
+    now_epoch=$(date -u +%s)
+    if [ "$type" != "tamper" ] && ! motion_budget_left "$now_epoch"; then
+        # Over budget: mark it seen so it is not re-examined, and count it for the summary.
+        printf '%s\n' "$now_epoch" > "$STATE_DIR/sent-$event"
+        motion_note_suppressed
+        log "event id=$event type=$type suppressed=1 reason=hourly_cap"
+        continue
+    fi
+
     first="${event}_000.jpg"
     if printf '%s\n' "$listing" | grep -q "^$first "; then
         if send_photo "$first" "$caption"; then
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
             [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
+            [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
             log "event id=$event type=$type frames=$frames sent=1"
         else
             log "event id=$event type=$type sent=0"
@@ -157,6 +199,23 @@ sound: $sound}$cut_short"
         fi
     fi
 done
+
+# --- suppressed-motion summary -----------------------------------------------------------------
+
+suppressed=0
+[ -f "$STATE_DIR/motion-suppressed" ] && suppressed=$(cat "$STATE_DIR/motion-suppressed")
+if [ "$suppressed" -gt 0 ]; then
+    last_summary=0
+    [ -f "$STATE_DIR/last-summary" ] && last_summary=$(cat "$STATE_DIR/last-summary")
+    now_epoch=$(date -u +%s)
+    if [ $((now_epoch - last_summary)) -ge "$SUMMARY_MIN_SEC" ]; then
+        if send_message "📊 camtrap: $suppressed further motion event(s) not sent individually — the hourly cap is $MOTION_ALERTS_PER_HOUR. Frames are on the receiver."; then
+            printf '%s\n' "$now_epoch" > "$STATE_DIR/last-summary"
+            rm -f "$STATE_DIR/motion-suppressed"
+            log "summary suppressed=$suppressed"
+        fi
+    fi
+fi
 
 # --- heartbeat ---------------------------------------------------------------------------------
 

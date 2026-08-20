@@ -10,7 +10,8 @@ it upwards instead of dying quietly.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -46,6 +47,9 @@ class Camera:
         self.sleep = sleep
         self._cap: object | None = None
         self.status = CameraStatus()
+        self._analysed: deque[float] = deque(maxlen=40)
+        self._raw_interval: float | None = None
+        self._last_raw: float | None = None
         self._stride = max(1, cfg.camera.capture_fps // max(1, cfg.camera.target_fps))
         self._counter = 0
 
@@ -101,6 +105,7 @@ class Camera:
             return None
         self.status.frames += 1
         self.status.last_frame_at = self.clock()
+        self._note_raw_frame()
         return frame
 
     def _skip(self, count: int) -> bool:
@@ -115,19 +120,40 @@ class Camera:
             if not self._cap.grab():
                 return False
             self.status.frames += 1
+            self._note_raw_frame()
         return True
 
-    def frames(self, *, limit: int | None = None) -> Iterator[np.ndarray]:
-        """Yield decimated frames, reopening the device if it drops off the bus."""
+    def _note_raw_frame(self) -> None:
+        """Exponentially smoothed interval between frames as the device delivers them."""
+        now = self.clock()
+        if self._last_raw is not None:
+            delta = now - self._last_raw
+            if 0 < delta < 5.0:
+                self._raw_interval = (
+                    delta if self._raw_interval is None else 0.8 * self._raw_interval + 0.2 * delta
+                )
+        self._last_raw = now
+
+    def frames(self, *, limit: int | None = None):
+        """Yield frames at roughly target_fps, with a stride derived from the MEASURED rate.
+
+        A fixed stride of capture_fps // target_fps assumes the camera delivers what it advertises.
+        This one advertises 30 fps for MJPEG and measured 12.5 fps in evening light, because UVC
+        cameras lengthen exposure as light drops. The fixed stride then waited for six frames —
+        480 ms per analysis instead of 200 ms — and the driver queue backed up, so every frame
+        analysed was already old. That was the "huge delay".
+
+        So: measure the delivery interval, skip only as many frames as that rate justifies, and
+        when the camera is slower than the target, skip nothing at all.
+        """
         produced = 0
         failures = 0
         while limit is None or produced < limit:
-            if (self._cap is None and not self.open()) or (
-                self._stride > 1 and not self._skip(self._stride - 1)
-            ):
+            if self._cap is None and not self.open():
                 frame = None
             else:
-                frame = self.read()
+                skip = self._stride_now() - 1
+                frame = self.read() if skip <= 0 or self._skip(skip) else None
             if frame is None:
                 failures += 1
                 self.release()
@@ -140,5 +166,28 @@ class Camera:
                 self.sleep(self.cfg.camera.reopen_delay_sec)
                 continue
             failures = 0
+            self._analysed.append(self.clock())
             produced += 1
             yield frame
+
+    def _stride_now(self) -> int:
+        """How many camera frames to consume per analysed frame, from the measured raw rate."""
+        raw = self.raw_fps()
+        if raw is None:
+            # Nothing measured yet: trust the configured numbers for the first few frames.
+            return max(1, self.cfg.camera.capture_fps // max(1, self.cfg.camera.target_fps))
+        return max(1, int(raw / max(0.1, self.cfg.camera.target_fps)))
+
+    def raw_fps(self) -> float | None:
+        """Delivery rate of the device itself, decoded or skipped."""
+        if self._raw_interval is None or self._raw_interval <= 0:
+            return None
+        return 1.0 / self._raw_interval
+
+    def measured_fps(self) -> float | None:
+        """Actual delivery rate of analysed frames, for the heartbeat and for selftest."""
+        stamps = list(self._analysed)
+        if len(stamps) < 3:
+            return None
+        span = stamps[-1] - stamps[0]
+        return (len(stamps) - 1) / span if span > 0 else None

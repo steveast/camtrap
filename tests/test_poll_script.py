@@ -272,3 +272,44 @@ def test_a_closed_event_carries_no_such_note(rig):
     rig.run()
     body = rig.body("photo-evt_20260820T131313Z_000.jpg.txt")
     assert "still running" not in body
+
+
+def test_ordinary_motion_is_capped_per_hour(rig):
+    """A windy afternoon must not put twenty photos in a private chat."""
+    rig.env["MOTION_ALERTS_PER_HOUR"] = "3"
+    for index in range(6):
+        rig.add_event(f"evt_2026082014{index:02d}00Z", "motion", frames=3)
+        rig.run()
+    photos = [n for n in rig.sent() if n.startswith("photo-")]
+    assert len(photos) == 3, f"cap is 3, sent {len(photos)}"
+
+
+def test_tamper_is_never_capped(rig):
+    rig.env["MOTION_ALERTS_PER_HOUR"] = "1"
+    rig.add_event("evt_20260820150000Z", "motion")
+    rig.run()
+    for index in range(3):
+        rig.add_event(f"evt_2026082016{index:02d}00Z", "tamper", signals=["ac_offline"])
+        rig.run()
+    photos = [n for n in rig.sent() if n.startswith("photo-")]
+    assert len(photos) == 4, "one motion plus three tampers must all get through"
+
+
+def test_suppressed_events_arrive_as_a_summary(rig):
+    rig.env["MOTION_ALERTS_PER_HOUR"] = "1"
+    rig.env["SUMMARY_MIN_SEC"] = "0"
+    for index in range(4):
+        rig.add_event(f"evt_2026082017{index:02d}00Z", "motion")
+        rig.run()
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    summaries = [b for b in bodies if "not sent individually" in b]
+    assert len(summaries) >= 1
+    assert "📊" in summaries[0]
+
+
+def test_a_capped_event_is_not_re_examined(rig):
+    rig.env["MOTION_ALERTS_PER_HOUR"] = "0"
+    rig.add_event("evt_20260820180000Z", "motion")
+    rig.run()
+    marker = Path(rig.env["CAMTRAP_STATE_DIR"]) / "sent-evt_20260820180000Z"
+    assert marker.exists(), "a suppressed event must still be marked seen"

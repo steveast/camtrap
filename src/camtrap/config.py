@@ -130,6 +130,10 @@ class SoundConfig:
     siren_mode: str = "yelp"
     volume_pct: int = 100
     cooldown_sec: float = 60.0
+    # The cooldown is per signal, not global: closing the lid and then pulling the cable are two
+    # different pieces of interference and each deserves its own alarm. This is the floor between
+    # any two bursts, so a flapping sensor still cannot machine-gun the siren.
+    retrigger_min_sec: float = 4.0
     max_per_event: int = 3
     max_per_hour: int = 10
     # Stage 1 — the spoken warning.

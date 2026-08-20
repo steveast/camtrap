@@ -250,6 +250,7 @@ class SoundResponder:
         self._siren_this_event = 0
         self._siren_times: deque[float] = deque()
         self._warn_times: deque[float] = deque()
+        self._siren_by_signal: dict[str, float] = {}
         self._last_skip: tuple[str, str] | None = None
 
     # --- wiring --------------------------------------------------------------
@@ -273,13 +274,18 @@ class SoundResponder:
     def on_tamper(self, signals: list[str], *, now: float) -> Played:
         return self._respond(Stage.SIREN, now=now, signals=signals)
 
+    def _fresh_signals(self, signals: list[str], now: float) -> list[str]:
+        """Signals not already answered with a siren inside the cooldown window."""
+        window = self.cfg.sound.cooldown_sec
+        return [s for s in signals if now - self._siren_by_signal.get(s, float("-inf")) >= window]
+
     def _respond(self, stage: Stage, *, now: float, signals: list[str]) -> Played:
         allowed, reason = self._gate(stage, now)
         if not allowed:
             self._log_skip(stage, reason or "gate")
             return Played(stage=stage, played=False, reason=reason or "gate")
 
-        blocked = self._limit_reason(stage, now)
+        blocked = self._limit_reason(stage, now, signals)
         if blocked:
             self._log_skip(stage, blocked)
             return Played(stage=stage, played=False, reason=blocked)
@@ -306,7 +312,7 @@ class SoundResponder:
         if self.cfg.sound.dry_run:
             # Everything above ran for real — the gate, the limits, the file check — so the log
             # records what a live run would have done, and the room stays quiet.
-            self._record(stage, now)
+            self._record(stage, now, signals)
             log.emit(
                 "sound_would_play",
                 stage=stage.value,
@@ -320,7 +326,7 @@ class SoundResponder:
 
         self.audio.prepare(volume_pct=volume)
         self._play(paths, stage=stage, now=now)
-        self._record(stage, now)
+        self._record(stage, now, signals)
 
         log.emit(
             "sound",
@@ -398,9 +404,17 @@ class SoundResponder:
 
     # --- limits --------------------------------------------------------------
 
-    def _limit_reason(self, stage: Stage, now: float) -> str:
+    def _limit_reason(self, stage: Stage, now: float, signals: list[str] | None = None) -> str:
         if stage is Stage.SIREN:
-            if now - self._last_siren < self.cfg.sound.cooldown_sec:
+            # A new KIND of interference is a new alarm. Closing the lid and then pulling the
+            # cable used to leave the second one silent for a minute, which is exactly the
+            # sequence a thief performs.
+            fresh = self._fresh_signals(signals or [], now)
+            floor = self.cfg.sound.retrigger_min_sec
+            if fresh:
+                if now - self._last_siren < floor:
+                    return "retrigger_floor"
+            elif now - self._last_siren < self.cfg.sound.cooldown_sec:
                 return "cooldown"
             if self._siren_this_event >= self.cfg.sound.max_per_event:
                 return "max_per_event"
@@ -419,11 +433,13 @@ class SoundResponder:
             times.popleft()
         return len(times)
 
-    def _record(self, stage: Stage, now: float) -> None:
+    def _record(self, stage: Stage, now: float, signals: list[str] | None = None) -> None:
         if stage is Stage.SIREN:
             self._last_siren = now
             self._siren_this_event += 1
             self._siren_times.append(now)
+            for signal_name in signals or []:
+                self._siren_by_signal[signal_name] = now
         else:
             self._last_warn = now
             self._warn_times.append(now)

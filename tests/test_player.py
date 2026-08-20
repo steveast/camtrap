@@ -249,3 +249,30 @@ def test_a_changed_reason_is_logged_again(responder, capsys):
     out = capsys.readouterr().out
     assert out.count("sound_skip") == 2
     assert "reason=not_armed" in out and "reason=paused" in out
+
+
+# --- cooldown is per signal: the lid and the cable are two different alarms --------------------
+
+
+def test_a_different_signal_breaks_through_the_cooldown(responder):
+    """Closing the lid then pulling the cable is what a thief actually does."""
+    assert responder.on_tamper(["lid_closed"], now=0.0).played
+    # same signal again inside the window: refused
+    assert not responder.on_tamper(["lid_closed"], now=20.0).played
+    # a different kind of interference: sounds immediately
+    result = responder.on_tamper(["ac_offline"], now=21.0)
+    assert result.played, "a new signal must not wait out another signal's cooldown"
+
+
+def test_a_repeated_signal_still_honours_its_own_cooldown(responder):
+    assert responder.on_tamper(["ac_offline"], now=0.0).played
+    assert not responder.on_tamper(["ac_offline"], now=30.0).played
+    assert responder.on_tamper(["ac_offline"], now=70.0).played
+
+
+def test_new_signals_cannot_machine_gun_the_siren(responder):
+    """A flapping sensor producing new names must still be floored."""
+    assert responder.on_tamper(["lid_closed"], now=0.0).played
+    result = responder.on_tamper(["ac_offline"], now=1.0)
+    assert not result.played and result.reason == "retrigger_floor"
+    assert responder.on_tamper(["ac_offline"], now=5.0).played
