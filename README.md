@@ -82,10 +82,13 @@ files play local language first, because English alone is a coin flip with hotel
 Texts live in [assets/voice/](assets/voice/) and render through
 [tools/make-warning.sh](tools/make-warning.sh) (`espeak-ng` + `ffmpeg`, both offline).
 
-One caveat worth repeating: `espeak-ng` is a formant synthesiser and Vietnamese and Thai are tonal,
-so **every file must be checked by a native speaker or replaced with a better recording before it
-is relied on**. The player reads a local `.ogg` and does not care how it was made, so swapping in a
-neural-TTS or human recording costs nothing. A warning nobody understands is decoration.
+Intelligibility is measured rather than hoped for: each file is fed to a speech recogniser trained
+on real speech in that language ([tools/check-warning.py](tools/check-warning.py)). Vietnamese
+through a piper neural voice comes back recognised word for word; the same sentence through
+`espeak-ng` comes back as a *different sentence* (29 % word recall), and Thai comes back as nothing
+at all. So a formant synthesiser cannot speak a tonal language — `vi` ships with a neural voice,
+`en` with espeak, and Thai ships not at all until there is a voice that can say it. Details and
+numbers: [assets/voice/README.md](assets/voice/README.md).
 
 ## Keeping the sound on
 

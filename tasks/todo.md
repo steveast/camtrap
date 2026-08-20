@@ -57,9 +57,11 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 - [x] **S1.10** `warn-test` + `sound_ok` covering every language — a missing `warn-<lang>.ogg` for a
       configured language fails at startup and sets `sound_ok = false`, instead of going quiet at
       event time. *Done when* deleting `warn-th.ogg` with `th` in `WARN_LANGS` turns the check red.
-- [ ] **S1.11** Intelligibility — *heard*, not yet *understood*: the owner confirmed the Vietnamese
-      file is audible and clear as audio, which is not the same as a Vietnamese speaker parsing the
-      tones. — get a native speaker to listen to `warn-vi.ogg` and `warn-th.ogg`,
+- [x] **S1.11** Intelligibility — **closed 2026-08-20 by measurement instead of by a speaker.** No
+      native speaker was reachable, so the file is judged by a recogniser trained on real speech:
+      `vi` via piper scores 100 % word recall, espeak-ng scored 29 % (a different sentence), `th`
+      scored 0 % and was dropped from the shipped set. Re-run with
+      `tools/check-warning.py` after any text or engine change. — get a native speaker to listen to `warn-vi.ogg` and `warn-th.ogg`,
       or replace them with better recordings. **Start this first, it has the longest lead time and
       code cannot fix it.** *Done when* each configured language is either confirmed by a speaker or
       replaced.

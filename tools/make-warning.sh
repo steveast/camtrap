@@ -2,9 +2,14 @@
 # Renders the stage 1 spoken warning from assets/voice/warn-<lang>.txt to an .ogg the player uses.
 # espeak-ng + ffmpeg, both already present. Nothing is downloaded.
 #
-# IMPORTANT: espeak-ng is a formant synthesiser and Vietnamese and Thai are tonal languages.
-# Verify by ear with a native speaker before the trip, or replace the .ogg with a better recording
-# (piper, or a one-off online render). The player does not care how the file was produced.
+# Two engines. espeak-ng is a formant synthesiser: fine for English, useless for a tonal language
+# — a speech recogniser trained on real Vietnamese heard its output as "Trời ơi! Mày tính là..."
+# (29% word recall). The same sentence through piper's neural voice was recognised word for word.
+#
+# So: if a piper voice exists for the language, it is used. espeak is the fallback, and the script
+# says out loud when it falls back for a tonal language.
+#
+# Voices live in $VOICE_DIR as <lang>.onnx + <lang>.onnx.json. Verify with tools/check-warning.py.
 #
 # Usage: tools/make-warning.sh --lang vi [--voice vi-vn-x-central] [--speed 150] [--out PATH]
 #        tools/make-warning.sh --all            # every warn-*.txt in assets/voice/
@@ -17,6 +22,10 @@ OUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/sounds"
 LANG_CODE=
 VOICE=
 SPEED=150
+VOICE_DIR="${CAMTRAP_VOICE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/voices}"
+PIPER_PY="${CAMTRAP_PIPER_PY:-}"
+# Languages where a formant synthesiser is not good enough to be understood.
+TONAL_LANGS="vi th zh yue lo my"
 OUT=
 ALL=0
 
@@ -32,6 +41,27 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+piper_available() {
+    lang=$1
+    [ -f "$VOICE_DIR/$lang.onnx" ] || return 1
+    [ -n "$PIPER_PY" ] || PIPER_PY=$(command -v piper 2>/dev/null || true)
+    [ -n "$PIPER_PY" ] || {
+        for candidate in "$REPO_DIR/.venv-voice/bin/python" "$REPO_DIR/.venv/bin/python"; do
+            [ -x "$candidate" ] && "$candidate" -c "import piper" 2>/dev/null && {
+                PIPER_PY="$candidate -m piper"; break
+            }
+        done
+    }
+    [ -n "$PIPER_PY" ]
+}
+
+is_tonal() {
+    for tonal in $TONAL_LANGS; do
+        [ "$1" = "$tonal" ] && return 0
+    done
+    return 1
+}
 
 render() {
     lang=$1
@@ -63,8 +93,20 @@ render() {
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" EXIT INT TERM
 
-    # -s speed, quiet stdout; the text file holds exactly one sentence
-    espeak-ng -v "$voice" -s "$SPEED" -w "$tmp" -f "$src"
+    if piper_available "$lang"; then
+        # Neural voice: the only way a tonal language comes out intelligible.
+        tr -d "\n" < "$src" | $PIPER_PY -m "$VOICE_DIR/$lang.onnx" -f "$tmp" 2>/dev/null
+        engine="piper"
+    else
+        # -s speed, quiet stdout; the text file holds exactly one sentence
+        espeak-ng -v "$voice" -s "$SPEED" -w "$tmp" -f "$src"
+        engine="espeak-ng"
+        if is_tonal "$lang"; then
+            echo "WARNING: '$lang' is tonal and no piper voice is installed in $VOICE_DIR." >&2
+            echo "         espeak output for tonal languages is not understood by native" >&2
+            echo "         speakers — verify with tools/check-warning.py before relying on it." >&2
+        fi
+    fi
     # adelay: 250 ms of silence up front, because PipeWire can clip the first syllable on a cold
     # sink. loudnorm: even level across languages. aresample + -ar: loudnorm internally runs at
     # 192 kHz and would leave the file there, four times the size for no gain on a 48 kHz sink.
@@ -74,7 +116,7 @@ render() {
     rm -f "$tmp"
     trap - EXIT INT TERM
 
-    printf '%s  voice=%s  ' "$dst" "$voice"
+    printf '%s  engine=%s  voice=%s  ' "$dst" "${engine:-espeak-ng}" "$voice"
     ffprobe -v error -show_entries format=duration -of csv=p=0 "$dst"
 }
 

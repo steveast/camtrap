@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-voice/
+*.onnx
+*.onnx.json
 venv/
 .pytest_cache/
 .ruff_cache/
@@ -25,3 +28,6 @@ config.toml
 TRIP.local.md
 *.local.md
 .venv/
+.venv-voice/
+*.onnx
+*.onnx.json
