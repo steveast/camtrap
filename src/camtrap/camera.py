@@ -65,13 +65,15 @@ class Camera:
     def open(self) -> bool:
         self._cap = self._opener(self.cfg.camera.device)
         opened = bool(self._cap is not None and self._cap.isOpened())
+        first = self.status.reopens == 0 and self.status.frames == 0
         self.status.opened = opened
         if opened:
             log.emit(
-                "camera",
+                "camera" if first else "camera_reopen",
                 device=self.cfg.camera.device,
                 fourcc=self.cfg.camera.fourcc,
                 stride=self._stride,
+                reopens=self.status.reopens,
             )
         else:
             log.emit("camera_error", device=self.cfg.camera.device, reason="cannot open")

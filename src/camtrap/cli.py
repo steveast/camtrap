@@ -55,6 +55,21 @@ def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return run_forever(cfg)
 
 
+def cmd_report(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    from pathlib import Path as _Path
+
+    from . import report
+
+    path = _Path(args.log) if args.log else cfg.root / "logs" / "camtrap.log"
+    summary, source = report.from_file(path)
+    print(report.render(summary, source=source))
+    if summary.noise:
+        print()
+        print(f"note: {summary.noise} audible event(s) in this log — expected only if someone")
+        print("      was actually in the room. For an empty-room checkpoint this must be zero.")
+    return 0
+
+
 def cmd_drill(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     from .runner import drill
 
@@ -279,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="main mode (used by the systemd unit)")
     run.set_defaults(func=cmd_run)
+
+    report_cmd = sub.add_parser("report", help="summarise a run's log")
+    report_cmd.add_argument("--log", default=None, help="path to the log file")
+    report_cmd.set_defaults(func=cmd_report)
 
     drill_cmd = sub.add_parser("drill", help="rehearse the physical checks: cable, mute, lid")
     drill_cmd.add_argument("--volume", type=int, default=40, help="siren volume for the drill")

@@ -21,13 +21,29 @@ if [ ! -x "$PY" ]; then
     exit 1
 fi
 
+LOG_DIR="${CAMTRAP_LOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/logs}"
+LOG="$LOG_DIR/camtrap.log"
+
 run() { PYTHONPATH="$REPO/src" "$PY" -m camtrap "$@"; }
+
+# Long runs go through here: the terminal shows them live, the file keeps them for later. An
+# overnight run whose only record is a closed scrollback cannot be reviewed at all.
+run_logged() {
+    mkdir -p "$LOG_DIR"
+    # Keep the file bounded: 8 MB is thousands of events, and this is a laptop, not a log server.
+    if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 8388608 ]; then
+        mv "$LOG" "$LOG.1"
+    fi
+    printf '\n=== %s : camtrap %s ===\n' "$(date -Is)" "$*" >> "$LOG"
+    PYTHONPATH="$REPO/src" "$PY" -m camtrap "$@" 2>&1 | tee -a "$LOG"
+    return "${PIPESTATUS[0]}"
+}
 
 case "${1:-arm}" in
     arm|"")
         # The default: check everything, then arm once the room goes quiet.
         shift || true
-        run guard "$@"
+        run_logged guard "$@"
         ;;
     off|stop)
         # Coming back for good: pause first so the poller does not report "went silent".
@@ -37,7 +53,7 @@ case "${1:-arm}" in
         ;;
     status)  shift || true; run status "$@" ;;
     check)   shift || true; run preflight "$@" ;;
-    drill)   shift || true; run drill "$@" ;;
+    drill)   shift || true; run_logged drill "$@" ;;
     test)
         # `guard test 30` rehearses at 30 % — the first run in a flat need not be full volume.
         shift || true
@@ -52,7 +68,15 @@ case "${1:-arm}" in
              exec "$REPO/tools/make-warning.sh" --all ;;
     calibrate) shift || true; run calibrate "$@" ;;
     mask)    shift || true; run mask "$@" ;;
-    logs)    exec journalctl --user -t camtrap -n "${2:-100}" ;;
+    logs)
+        # The unit logs to the journal; a hand-started run logs to the file. Show whichever exists.
+        if [ -f "$LOG" ]; then
+            tail -n "${2:-100}" "$LOG"
+        else
+            journalctl --user -t camtrap -n "${2:-100}"
+        fi
+        ;;
+    report)  shift || true; run report --log "$LOG" "$@" ;;
     -h|--help|help)
         cat <<'USAGE'
 guard — laptop camera trap
@@ -68,7 +92,8 @@ guard — laptop camera trap
   guard sounds       regenerate siren.ogg and warn-*.ogg
   guard calibrate    measure this room's noise floor, recommend a threshold
   guard mask         capture a reference frame for the ignore mask
-  guard logs [N]     the agent's journal
+  guard logs [N]     the last N log lines (file for hand-started runs, journal for the unit)
+  guard report       summarise a run: events, sirens, warnings, drops, what it refused and why
 
 Leaving:  run `guard`, take your things, walk out. It arms itself once the room is still.
 Coming back: unlock the screen — that disarms it. `guard off` when you are done for good.

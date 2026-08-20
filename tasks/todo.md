@@ -66,9 +66,9 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 - [x] **S1.7** `camtrap input-scan` — list input devices reporting mute/volume keys; optional
       `EVIOCGRAB` on **external devices only**, released on fd close. *Done when* the grab survives a
       `kill -9` without leaving input captured.
-- [~] **S1.8** Physical pass (checks 1–6 in plan.md S1). **Check 1 done 2026-08-20**: siren and the
-      Vietnamese warning both audible from the built-in speakers (`guard test 30`). Remaining:
-      mute mid-siren, volume down, lid close, power press, replug — all covered by `guard drill`.
+- [x] **S1.8** Physical pass — done 2026-08-20 via `guard test 30` and `guard drill`; the owner
+      reports the cable, mute, lid and power behaviours all correct. **→ CHECKPOINT 1 PASSED.**
+      From here the trap already does the thing ranked first, even if nothing else lands.
 
 **→ CHECKPOINT 1.** Nothing proceeds until the physical checks pass. After this the trap already
 does the thing ranked first.
@@ -176,6 +176,14 @@ systemd unit, and arming keys on the room going quiet instead of on a screen loc
 - [x] **G.3** `arming.mode = "on_still"` — arms once the frame is quiet for 30 s, movement restarts
       the clock, and a room that never quiets arms at the 300 s deadline anyway.
 - [x] **G.4** Poller announces arming transitions: 🛡 when it takes hold, 🔓 when it stops.
+
+## Checkpoint status
+
+- **Checkpoint 1 — PASSED (2026-08-20).** Siren audible from the built-in speakers, silencing
+  defeated, machine stays awake on a closed lid and a power press.
+- Checkpoint 2 — 30-minute empty-room run, not yet done.
+- Checkpoint 3 — boxes untouched, awaiting review of recv/tg/poll.
+- Checkpoint 4 — 24-hour empty-room run, the gate that decides whether the trap travels.
 
 ## What is left, and why code cannot close it
 

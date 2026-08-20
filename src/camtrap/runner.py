@@ -399,6 +399,14 @@ def drill(
         camera_ok = camera.open()
         if not camera_ok:
             print("camera unavailable — the cable and lid checks still work")
+        log.emit(
+            "start",
+            mode="drill",
+            arming=cfg.arming.mode,
+            siren_sec=siren_sec,
+            volume=volume_pct,
+            camera=camera_ok,
+        )
         try:
             while not runner._stop and runner.clock() < deadline:
                 now = runner.clock()
@@ -412,6 +420,14 @@ def drill(
                 time.sleep(cfg.sound.hold_poll_ms / 1000.0)
         finally:
             camera.release()
+            log.emit(
+                "stop",
+                mode="drill",
+                frames=runner.stats.frames,
+                tamper=runner.stats.tamper_events,
+                sirens=runner.stats.sirens,
+                warnings=runner.stats.warnings,
+            )
     print()
     print(
         f"drill over: {runner.stats.tamper_events} tamper signal(s), "

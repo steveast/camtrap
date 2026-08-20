@@ -80,6 +80,19 @@ again; the systemd unit does both automatically on stop and start.
    writing. Hotels pull footage against a report, so file one even if the laptop is still there.
 5. Keep the frames. They are material for management and the police, not for publication.
 
+## Reviewing a long run
+
+```sh
+guard report          # events, sirens, warnings, refusals, drops — one screen
+guard logs 200        # the raw lines behind it
+```
+
+A hand-started run tees its output to `~/.local/share/camtrap/logs/camtrap.log` (rotated at 8 MB),
+because an overnight run whose only record is a closed terminal cannot be reviewed at all.
+
+For an empty-room checkpoint the line that matters is `AUDIBLE TOTAL` — it must be zero. Sirens and
+warnings are counted separately from refusals: refusals are the safety net working, not failures.
+
 ## When it fires for nothing
 
 | Symptom | Likely cause | Fix |
