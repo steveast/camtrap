@@ -1,0 +1,28 @@
+[Unit]
+Description=camtrap — laptop camera trap with a two-stage audible response
+Documentation=https://github.com/steveast/camtrap
+# PipeWire lives in the user session; without it the siren has nowhere to play.
+After=pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/camtrap/venv/bin/camtrap run
+# Pausing on the way out is what stops "the owner stopped the unit" from looking like
+# "the laptop was taken": the poller treats paused silence as expected.
+ExecStop=%h/.local/share/camtrap/venv/bin/camtrap pause
+ExecStartPost=%h/.local/share/camtrap/venv/bin/camtrap resume
+Restart=always
+RestartSec=5
+# The agent holds its own systemd-inhibit; the unit must not be killed while it does.
+KillMode=mixed
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=camtrap
+# Modest hardening: no new privileges, and no write access outside its own state.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

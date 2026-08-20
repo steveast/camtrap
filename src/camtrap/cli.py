@@ -97,6 +97,20 @@ def cmd_input_scan(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_selftest(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    from . import selftest
+
+    checks, failures = selftest.run(cfg)
+    print(selftest.render(checks))
+    print()
+    if failures:
+        print(f"{failures} check(s) failed — the trap is not ready")
+    else:
+        warns = sum(1 for check in checks if check.verdict == selftest.WARN)
+        print("ready" + (f" ({warns} warning(s))" if warns else ""))
+    return 1 if failures else 0
+
+
 def cmd_calibrate(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Measure how much an empty room moves by itself, and suggest a threshold above it."""
     from .camera import Camera
@@ -164,6 +178,30 @@ def cmd_mask(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Install and enable the systemd --user unit from the repository copy."""
+    import shutil
+    import subprocess
+    from pathlib import Path as _Path
+
+    repo_unit = _Path(__file__).resolve().parents[2] / "deploy" / "systemd" / "camtrap.service"
+    if not repo_unit.exists():
+        print(f"unit not found: {repo_unit}")
+        return 1
+    unit_dir = (
+        _Path(__import__("os").environ.get("XDG_CONFIG_HOME", _Path.home() / ".config"))
+        / "systemd"
+        / "user"
+    )
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(repo_unit, unit_dir / "camtrap.service")
+    print(f"installed {unit_dir / 'camtrap.service'}")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print("run: systemctl --user enable --now camtrap")
+    print("first: camtrap selftest && camtrap siren-test && camtrap warn-test")
+    return 0
+
+
 def cmd_pause(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     state.write_mode(cfg.root, state.MODE_PAUSED)
     return 0
@@ -201,12 +239,18 @@ def build_parser() -> argparse.ArgumentParser:
     input_scan = sub.add_parser("input-scan", help="input devices reporting mute/volume keys")
     input_scan.set_defaults(func=cmd_input_scan)
 
+    selftest_cmd = sub.add_parser("selftest", help="camera, audio, arming, receiver, inhibitors")
+    selftest_cmd.set_defaults(func=cmd_selftest)
+
     calibrate = sub.add_parser("calibrate", help="noise statistics, recommends MIN_AREA_PCT")
     calibrate.add_argument("--sec", type=float, default=30.0, help="seconds to sample")
     calibrate.set_defaults(func=cmd_calibrate)
 
     mask = sub.add_parser("mask", help="capture a reference frame for the ignore mask")
     mask.set_defaults(func=cmd_mask)
+
+    install = sub.add_parser("install", help="install and enable the systemd --user unit")
+    install.set_defaults(func=cmd_install)
 
     pause = sub.add_parser("pause", help="mark an expected offline period")
     pause.set_defaults(func=cmd_pause)

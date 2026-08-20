@@ -23,22 +23,51 @@ class Session(Protocol):
 
 
 class LogindSession:
-    """Reads LockedHint from logind. Verified present on this machine under Wayland."""
+    """Reads LockedHint from logind.
+
+    "self" only resolves for a caller that belongs to a session, which a systemd --user service or
+    a shell spawned outside the seat does not. So resolve the session id explicitly: XDG_SESSION_ID
+    first, then the user's display session.
+    """
 
     def __init__(self, cfg: Config) -> None:
-        self._cmd = ["loginctl", "show-session", "self", "-p", "LockedHint", "--value"]
         self._cfg = cfg
+        self._session: str | None = None
 
-    def locked_hint(self) -> bool | None:
+    def _run(self, args: list[str]) -> str | None:
         try:
             result = subprocess.run(
-                self._cmd, capture_output=True, text=True, timeout=5, check=False
+                ["loginctl", *args], capture_output=True, text=True, timeout=5, check=False
             )
         except (OSError, subprocess.SubprocessError):
             return None
         if result.returncode != 0:
             return None
-        answer = result.stdout.strip().lower()
+        return result.stdout.strip()
+
+    def _session_id(self) -> str | None:
+        if self._session:
+            return self._session
+        from os import environ
+
+        candidates = [environ.get("XDG_SESSION_ID")]
+        user = environ.get("USER") or environ.get("LOGNAME")
+        if user:
+            candidates.append(self._run(["show-user", user, "-p", "Display", "--value"]))
+        for candidate in candidates:
+            if candidate and self._run(["show-session", candidate, "-p", "Id", "--value"]):
+                self._session = candidate
+                return candidate
+        return None
+
+    def locked_hint(self) -> bool | None:
+        session = self._session_id()
+        if session is None:
+            return None
+        answer = self._run(["show-session", session, "-p", "LockedHint", "--value"])
+        if answer is None:
+            return None
+        answer = answer.lower()
         if answer in ("yes", "true", "1"):
             return True
         if answer in ("no", "false", "0"):

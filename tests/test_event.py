@@ -79,9 +79,7 @@ def test_truncation_is_recorded_not_silent(cfg):
 
 def test_manifest_records_the_shape_of_the_event(writer):
     writer.observe(_frame(), now=0.0)
-    writer.begin(
-        EventKind.TAMPER, now=1.0, frame=_frame(), signals=["ac_offline", "lid_closed"]
-    )
+    writer.begin(EventKind.TAMPER, now=1.0, frame=_frame(), signals=["ac_offline", "lid_closed"])
     writer.feed(_frame(), now=6.5)
     writer.mark_sound(stage="siren", latency_ms=820, evidence_confirmed=True)
     closed = writer.maybe_close(now=60.0)

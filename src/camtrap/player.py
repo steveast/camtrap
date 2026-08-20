@@ -81,6 +81,7 @@ class AudioPath:
         self._run = runner if runner is not None else _default_runner
         self._sink: str | None = None
         self._card: str | None = None
+        self._prev_profile: str | None = None
 
     # --- discovery -----------------------------------------------------------
 
@@ -92,6 +93,7 @@ class AudioPath:
             return self.cfg.sound.card, None
         result = self._pactl("list", "cards")
         text = getattr(result, "stdout", "") or ""
+        self._prev_profile = self._active_profile(text)
         card: str | None = None
         best: tuple[str | None, str | None] = (None, None)
         profiles: list[str] = []
@@ -115,6 +117,30 @@ class AudioPath:
             if speaker_profiles:
                 return card, speaker_profiles[0]
         return best
+
+    @staticmethod
+    def _active_profile(text: str) -> str | None:
+        """The profile in force before we touch anything, so a selftest can put it back."""
+        current: str | None = None
+        has_speaker = False
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("Card #"):
+                if has_speaker and current:
+                    return current
+                current, has_speaker = None, False
+            elif line.startswith("Active Profile: "):
+                current = line.removeprefix("Active Profile: ").strip()
+            elif line.startswith("[Out] Speaker"):
+                has_speaker = True
+        return current if has_speaker else None
+
+    def restore_profile(self) -> bool:
+        """Undo the profile switch. Used by selftest: a check must not leave the system changed."""
+        if not (self._card and self._prev_profile):
+            return False
+        self._pactl("set-card-profile", self._card, self._prev_profile)
+        return True
 
     def _find_sink(self) -> str | None:
         if self.cfg.sound.sink:

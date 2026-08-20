@@ -147,11 +147,11 @@ new ssh keys, install, cron (spec §8). Deployment order: receiver → sender �
 
 ## S6 · Trip harness (5 h, deps: S1–S5)
 
-- [ ] **S6.1** `deploy/systemd/camtrap.service` (`--user`, inhibitors, `ExecStop` → pause) +
+- [x] **S6.1** `deploy/systemd/camtrap.service` (`--user`, inhibitors, `ExecStop` → pause) +
       `deploy/install-*.sh` + `camtrap install`. *Done when* a reboot brings the unit back armed.
-- [ ] **S6.2** `selftest.py` — camera, detector, receiver key, inbox, audio path, inhibitors, arming.
+- [x] **S6.2** `selftest.py` — camera, detector, receiver key, inbox, audio path, inhibitors, arming.
       *Done when* every check reports green on the real machine.
-- [ ] **S6.3** `docs/runbook.md` — arrival, what to do when it fires, pausing before picking the
+- [x] **S6.3** `docs/runbook.md` — arrival, what to do when it fires, pausing before picking the
       laptop up, what to do if the siren goes off for nothing, and the `kernel.sysrq` warning.
 - [ ] **S6.4** 24-hour empty-room run; read the journal afterwards.
 
