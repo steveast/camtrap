@@ -1,6 +1,7 @@
 """S1: the loop that turns a tamper signal into sound (plan S1, checkpoint 1 in code form)."""
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from tests.fakes import FakeProcess, FakeRunner
@@ -251,3 +252,53 @@ def test_a_new_event_warns_again(framed):
         runner.on_frame(frame, now=400.0 + index * 0.2)
     warnings = [p for p in runner.spawned if any("warn-" in a for a in p.argv)]
     assert len(warnings) == 2
+
+
+def test_finish_closes_an_open_event(framed):
+    """However the loop stops, the manifest on disk must be complete."""
+    import json
+
+    runner, blank, _cmds = framed
+    for index in range(4):
+        frame = blank()
+        frame[120:260, 100 + index * 20 : 230 + index * 20] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+    assert runner.events.active is not None
+    runner.finish()
+    assert runner.events.active is None
+    inbox = Path(runner.cfg.upload.local_inbox)
+    manifests = list(runner.cfg.spool_dir.glob("evt_*.json")) + list(inbox.glob("evt_*.json"))
+    assert manifests
+    payload = json.loads(manifests[0].read_text())
+    assert payload["closed"] is True
+
+
+def test_a_failing_uploader_never_stops_the_loop(framed, capsys):
+    """Detection and the siren outrank delivery: an exception in housekeeping must not end the run.
+
+    This killed the agent for real: a plain file where the inbox directory belonged raised
+    FileExistsError out of the sink, up through the capture path, and the trap was dead — no more
+    frames, no more siren.
+    """
+    runner, blank, _cmds = framed
+
+    class Exploding:
+        def drain(self, **kwargs):
+            raise RuntimeError("delivery exploded")
+
+        def heartbeat(self, line):
+            raise RuntimeError("delivery exploded")
+
+        sinks: ClassVar[list] = []
+
+    runner.uploader = Exploding()
+    runner.heartbeat.uploader = Exploding()
+
+    for index in range(6):
+        frame = blank()
+        frame[120:260, 100 + index * 20 : 230 + index * 20] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+
+    assert runner.stats.frames == 6, "the camera path kept running"
+    assert runner.stats.motion_events >= 1
+    assert "housekeeping_error" in capsys.readouterr().out

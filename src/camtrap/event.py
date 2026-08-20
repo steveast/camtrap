@@ -77,6 +77,7 @@ class EventWriter:
             if kind is EventKind.TAMPER and self.active.kind is not EventKind.TAMPER:
                 self.active.kind = EventKind.TAMPER
                 self.active.signals.extend(signals or [])
+                self._write_manifest(self.active)  # escalation must survive a sudden death
             self.active.last_motion = now
             return self.active
 
@@ -111,6 +112,11 @@ class EventWriter:
         if trigger is not None:
             self._write_frame(event, trigger, now=now, throttled=True)
 
+        # Write the manifest immediately, marked open. If the agent dies mid-event — battery
+        # pulled, machine shut down, laptop carried off — the frames would otherwise arrive with
+        # no type and no signals, and a tamper event would read as ordinary motion.
+        self._write_manifest(event)
+
         log.emit(
             "event_begin",
             id=event.event_id,
@@ -137,6 +143,9 @@ class EventWriter:
                 log.emit("event_truncated", id=event.event_id, cap=event.frames_written)
             return False
         self._write_frame(event, frame, now=now, throttled=True)
+        # Keep the on-disk count roughly current without rewriting JSON for every frame.
+        if event.frames_written % 4 == 0:
+            self._write_manifest(event)
         return True
 
     def mark_sound(
@@ -148,6 +157,7 @@ class EventWriter:
         self.active.sound_stage = stage
         self.active.sound_latency_ms = latency_ms
         self.active.sound_evidence_confirmed = evidence_confirmed
+        self._write_manifest(self.active)
 
     def maybe_close(self, *, now: float) -> Event | None:
         event = self.active
@@ -194,6 +204,7 @@ class EventWriter:
         path = self.cfg.spool_dir / f"{event.event_id}.json"
         payload = {
             "id": event.event_id,
+            "closed": event.ended is not None,
             "type": event.kind.value,
             "signals": event.signals,
             "started": event.started_wall,

@@ -218,6 +218,13 @@ def test_missing_required_env_fails_loudly(rig):
     assert b"TELEGRAM_BOT_TOKEN" in result.stderr
 
 
+def test_the_first_observation_is_recorded_silently(rig):
+    """Announcing "not armed" on the poller's very first tick is noise, not information."""
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=0, arm_reason="waiting_for_quiet")
+    rig.run()
+    assert [n for n in rig.sent() if n.startswith("message-")] == []
+
+
 def test_arming_transitions_are_announced(rig):
     rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=0, arm_reason="waiting_for_quiet")
     rig.run()
@@ -237,3 +244,31 @@ def test_disarming_is_announced_once(rig):
     assert len([n for n in rig.sent() if n.startswith("message-")]) == before
     bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
     assert any("🔓" in body and "unlock_grace" in body for body in bodies)
+
+
+def test_an_unclosed_event_is_flagged_in_the_caption(rig):
+    """An event still running when the agent died means the laptop left the room."""
+    rig.listing.write_text(
+        "evt_20260820T121212Z_000.jpg 1024 1787000000.0\n"
+        "evt_20260820T121212Z.json 200 1787000000.0\n"
+    )
+    (rig.manifests / "evt_20260820T121212Z.json").write_text(
+        '{"type":"tamper","closed":false,"signals":["ac_offline"],"frames":5}'
+    )
+    rig.run()
+    body = rig.body("photo-evt_20260820T121212Z_000.jpg.txt")
+    assert "still running when the agent stopped" in body
+    assert "🚨" in body
+
+
+def test_a_closed_event_carries_no_such_note(rig):
+    rig.listing.write_text(
+        "evt_20260820T131313Z_000.jpg 1024 1787000000.0\n"
+        "evt_20260820T131313Z.json 200 1787000000.0\n"
+    )
+    (rig.manifests / "evt_20260820T131313Z.json").write_text(
+        '{"type":"motion","closed":true,"frames":9}'
+    )
+    rig.run()
+    body = rig.body("photo-evt_20260820T131313Z_000.jpg.txt")
+    assert "still running" not in body

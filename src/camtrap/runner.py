@@ -83,6 +83,14 @@ class Runner:
     def request_stop(self, *_: object) -> None:
         self._stop = True
 
+    def finish(self) -> None:
+        """Close an event that is still open, so its manifest is complete on disk."""
+        if self.events.active is not None:
+            closed = self.events.close(now=self.clock())
+            log.emit("event_flush", id=closed.event_id, frames=closed.frames_written)
+        # One last drain attempt: frames already acknowledged are gone, the rest stay spooled.
+        self.uploader.drain(now=self.clock(), limit=32)
+
     def step(self, now: float) -> list[tamper_mod.Signal]:
         """One iteration: arming state, tamper poll, sound, hold, then network work."""
         self.arming.poll(now=now)
@@ -163,6 +171,16 @@ class Runner:
     def _housekeeping(self, now: float) -> None:
         # Uploading and heartbeats run from here so the capture path never blocks on the network:
         # a sagging link must not slow the camera down (spec 3.5).
+        #
+        # And it must never STOP the camera either. Delivery touches the filesystem, ssh and the
+        # network; detection and the siren do not need any of them. An exception here used to take
+        # the whole trap down, which is the one failure that must not be possible.
+        try:
+            self._housekeeping_inner(now)
+        except Exception as exc:
+            log.emit("housekeeping_error", why=f"{type(exc).__name__}: {exc}")
+
+    def _housekeeping_inner(self, now: float) -> None:
         self.uploader.drain(now=now, limit=8)
         if self.heartbeat.due(now=now):
             self.heartbeat.maybe_send(
@@ -251,6 +269,7 @@ def run_forever(cfg: Config) -> int:
                 if runner._stop:
                     break
         finally:
+            runner.finish()
             camera.release()
             if camera.status.gone and cfg.tamper.camera_gone_is_tamper:
                 now = runner.clock()
@@ -347,6 +366,80 @@ def preflight(
     return ready, rows
 
 
+def watch(cfg: Config, *, minutes: float = 30.0, still: float = 10.0) -> int:
+    """An empty-room run: real detection, real events, no sound (spec criterion 6).
+
+    Checkpoints 2 and 4 ask one question — does anything fire when nobody is there. Answering it
+    with the siren live would mean a police siren in a flat every time a curtain moved, so sound
+    is decided and logged exactly as in a live run, then suppressed at the last step.
+    """
+    from .arming import Arming
+
+    cfg.sound.dry_run = True
+    cfg.arming.mode = "on_still"
+    cfg.arming.arm_when_still_sec = still
+    # A rehearsal is not evidence: keep test frames out of the cloud sync folder.
+    cfg.upload.sinks = [name for name in cfg.upload.sinks if name != "mega"]
+
+    missing = sounds.missing_sounds(cfg)
+    if missing:
+        print(f"missing sounds: {', '.join(missing)} — run `guard sounds` first")
+        return 1
+
+    seconds = minutes * 60.0
+    print(f"OBSERVATION — {minutes:.0f} min, real detection, sound suppressed and logged.")
+    print(f"Arms {still:.0f} s after the room goes quiet. Leave the room; do not come back in.")
+    print()
+    print("What this measures: whether an empty room produces events. One `light` event when the")
+    print("screen blanks is expected — that is the room getting darker, not a fault.")
+    print()
+    print("Ends by itself. Afterwards: guard report")
+    print()
+
+    with Inhibitor() as inhibitor:
+        camera = Camera(cfg)
+        runner = Runner(cfg, inhibitor=inhibitor, camera=camera, arming=Arming(cfg))
+        runner.started = runner.clock()
+        runner.arming.start(now=runner.started)
+        deadline = runner.started + seconds
+        signal.signal(signal.SIGINT, runner.request_stop)
+        signal.signal(signal.SIGTERM, runner.request_stop)
+        if not camera.open():
+            print("camera unavailable — nothing to observe")
+            return 1
+        log.emit("start", mode="watch", arming=cfg.arming.mode, minutes=minutes, dry_run=True)
+        try:
+            for frame in camera.frames():
+                now = runner.clock()
+                runner.on_frame(frame, now)
+                runner.step(now)
+                if runner._stop or now >= deadline:
+                    break
+        finally:
+            runner.finish()
+            camera.release()
+            log.emit(
+                "stop",
+                mode="watch",
+                frames=runner.stats.frames,
+                events=runner.stats.motion_events + runner.stats.light_events,
+                tamper=runner.stats.tamper_events,
+                would_sirens=runner.stats.sirens,
+                would_warnings=runner.stats.warnings,
+            )
+
+    audible = runner.stats.sirens + runner.stats.warnings
+    print()
+    print(
+        f"{'CLEAN' if audible == 0 else 'NOT CLEAN'}: {runner.stats.frames} frames, "
+        f"{runner.stats.motion_events} motion, {runner.stats.light_events} light, "
+        f"{runner.stats.tamper_events} tamper — would have sounded {audible} time(s)"
+    )
+    if audible:
+        print("Next: guard report, then guard mask (cover what moves) and guard calibrate.")
+    return 0
+
+
 def drill(
     cfg: Config, *, volume_pct: int = 40, siren_sec: float = 2.0, seconds: float = 180.0
 ) -> int:
@@ -369,6 +462,8 @@ def drill(
     cfg.arming.exit_delay_sec = 0.0
     cfg.arming.grace_after_unlock_sec = 0.0
     cfg.detector.warmup_sec = min(cfg.detector.warmup_sec, 3.0)
+    # Same rule as watch(): a drill does not publish frames to the cloud.
+    cfg.upload.sinks = [name for name in cfg.upload.sinks if name != "mega"]
 
     missing = sounds.missing_sounds(cfg)
     if missing:
@@ -419,6 +514,7 @@ def drill(
                 runner.step(now)
                 time.sleep(cfg.sound.hold_poll_ms / 1000.0)
         finally:
+            runner.finish()
             camera.release()
             log.emit(
                 "stop",

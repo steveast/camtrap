@@ -103,3 +103,21 @@ def test_a_standalone_check_puts_the_audio_profile_back(cfg, monkeypatch):
     restored.clear()
     runner.audio_probe(cfg, restore=False)
     assert not restored, "arming keeps the speakers"
+
+
+def test_watch_does_not_write_to_the_cloud_folder(cfg):
+    """A rehearsal must not publish frames into a folder that syncs off the machine.
+
+    This is a real incident, not a hypothetical: test runs put 60 frames of the owner's room into
+    the cloud folder because mega is in the default sink list.
+    """
+    cfg.upload.sinks = ["prod", "mega"]
+    # No sounds generated in cfg, so watch() bails out right after adjusting the config.
+    assert runner.watch(cfg, minutes=0.01) == 1
+    assert cfg.upload.sinks == ["prod"]
+
+
+def test_drill_does_not_write_to_the_cloud_folder(cfg):
+    cfg.upload.sinks = ["prod", "mega"]
+    assert runner.drill(cfg, seconds=0.01) == 1
+    assert cfg.upload.sinks == ["prod"]

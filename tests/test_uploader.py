@@ -226,3 +226,68 @@ def test_ssh_argv_carries_key_and_options(cfg):
     assert "-i" in argv and "/home/x/.ssh/camtrap" in argv
     assert "BatchMode=yes" in argv
     assert argv[-1] == "put-frame evt_A_000.jpg"
+
+
+# --- a sink is untrusted code: it must never end the run ---------------------------------------
+
+
+def test_a_broken_inbox_is_reported_not_raised(cfg, spool, tmp_path):
+    """A plain file where the inbox directory should be: report it, do not raise."""
+    blocked = tmp_path / "blocked-inbox"
+    blocked.write_text("not a directory")
+    _write(cfg, "evt_A_000.jpg")
+    sink = LocalSink(cfg, blocked)
+    result = sink.send(cfg.spool_dir / "evt_A_000.jpg")
+    assert not result.ok and "unusable" in result.detail
+    assert spool.depth() == 1, "the frame stays until someone acknowledges it"
+
+
+def test_a_sink_that_raises_does_not_stop_the_drain(cfg, spool, local):
+    _write(cfg, "evt_A_000.jpg")
+
+    class Exploding:
+        name = "mega"
+
+        def send(self, path):
+            raise RuntimeError("boom")
+
+        def heartbeat(self, line):
+            raise RuntimeError("boom")
+
+    report = Uploader(cfg, spool, sinks=[Exploding(), local]).drain()
+    # the working sink still delivered, and the frame was freed by its acknowledgement
+    assert report.acknowledged == ["evt_A_000.jpg"]
+    assert spool.depth() == 0
+
+
+def test_an_exploding_sink_is_logged_by_name(cfg, spool, capsys):
+    _write(cfg, "evt_A_000.jpg")
+
+    class Exploding:
+        name = "prod"
+
+        def send(self, path):
+            raise OSError("disk on fire")
+
+        def heartbeat(self, line):
+            raise OSError("disk on fire")
+
+    uploader = Uploader(cfg, spool, sinks=[Exploding()])
+    uploader.drain()
+    out = capsys.readouterr().out
+    assert "upload_failed" in out and "OSError" in out
+    assert spool.depth() == 1
+
+
+def test_heartbeat_survives_an_exploding_sink(cfg, spool, capsys):
+    class Exploding:
+        name = "prod"
+
+        def send(self, path):
+            raise RuntimeError("no")
+
+        def heartbeat(self, line):
+            raise RuntimeError("no")
+
+    assert Uploader(cfg, spool, sinks=[Exploding()]).heartbeat("x=1\n") is False
+    assert "heartbeat_error" in capsys.readouterr().out

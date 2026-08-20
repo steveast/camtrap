@@ -121,11 +121,14 @@ class LocalSink:
     def send(self, path: Path) -> SinkResult:
         if not self.available:
             return SinkResult(False, "sink unavailable")
-        self.inbox.mkdir(parents=True, exist_ok=True)
-        target = self.inbox / path.name
-        tmp = target.with_suffix(target.suffix + ".part")
-        shutil.copyfile(path, tmp)
-        tmp.replace(target)
+        try:
+            self.inbox.mkdir(parents=True, exist_ok=True)
+            target = self.inbox / path.name
+            tmp = target.with_suffix(target.suffix + ".part")
+            shutil.copyfile(path, tmp)
+            tmp.replace(target)
+        except OSError as exc:
+            return SinkResult(False, f"inbox unusable: {exc}")
         return SinkResult(True, "stored", acknowledged=True)
 
     def heartbeat(self, line: str) -> SinkResult:
@@ -133,9 +136,12 @@ class LocalSink:
             return SinkResult(False, "sink unavailable")
         # Mirror the receiver's layout: frames in inbox/, status in state/. The poller reads
         # state/heartbeat, so writing it beside the frames would leave it invisible.
-        state = self.inbox.parent / "state"
-        state.mkdir(parents=True, exist_ok=True)
-        (state / "heartbeat").write_text(line)
+        try:
+            state = self.inbox.parent / "state"
+            state.mkdir(parents=True, exist_ok=True)
+            (state / "heartbeat").write_text(line)
+        except OSError as exc:
+            return SinkResult(False, f"state unusable: {exc}")
         return SinkResult(True, "stored")
 
 
@@ -222,7 +228,10 @@ class Uploader:
             acknowledged = False
             any_failure = False
             for sink in self.sinks:
-                result = sink.send(path)
+                try:
+                    result = sink.send(path)
+                except Exception as exc:
+                    result = SinkResult(False, f"{type(exc).__name__}: {exc}")
                 if result.ok:
                     if sink.name == "mega":
                         report.copied.append(path.name)
@@ -248,7 +257,11 @@ class Uploader:
     def heartbeat(self, line: str) -> bool:
         ok = False
         for sink in self.sinks:
-            result = sink.heartbeat(line)
+            try:
+                result = sink.heartbeat(line)
+            except Exception as exc:
+                log.emit("heartbeat_error", sink=sink.name, why=f"{type(exc).__name__}: {exc}")
+                continue
             if result.ok and sink.name == "prod":
                 ok = True
         return ok

@@ -109,6 +109,7 @@ for event in $events; do
     signals=$(printf '%s' "$manifest" | tr -d ' \n' |
         sed -n 's/.*"signals":\[\([^]]*\)\].*/\1/p' | tr -d '"')
     sound=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"sound_stage":"\([a-z]*\)".*/\1/p')
+    closed=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"closed":\([a-z]*\).*/\1/p')
     : "${type:=motion}"
     : "${frames:=1}"
 
@@ -126,12 +127,18 @@ for event in $events; do
         *) icon="📷"; headline="movement in the room" ;;
     esac
 
+    # An unclosed manifest means the agent stopped while the event was still running — the
+    # laptop was carried off, shut down, or ran out of battery. That is worth saying out loud.
+    cut_short=""
+    [ "$closed" = "false" ] && cut_short="
+note: event was still running when the agent stopped"
+
     caption="$icon $headline
 time: $when
 type: $type${signals:+
 signals: $signals}
 frames: $frames${sound:+
-sound: $sound}"
+sound: $sound}$cut_short"
 
     first="${event}_000.jpg"
     if printf '%s\n' "$listing" | grep -q "^$first "; then
@@ -176,7 +183,12 @@ fi
 if [ "$hb_armed" != "-" ]; then
     prev="-"
     [ -f "$STATE_DIR/last-armed" ] && prev=$(cat "$STATE_DIR/last-armed")
-    if [ "$hb_armed" != "$prev" ]; then
+    if [ "$prev" = "-" ]; then
+        # First observation: record it, say nothing. Announcing "not armed" the first time the
+        # poller ever runs is noise, and noise is what makes alarms ignorable.
+        printf '%s\n' "$hb_armed" > "$STATE_DIR/last-armed"
+        log "armed_init value=$hb_armed reason=$hb_reason"
+    elif [ "$hb_armed" != "$prev" ]; then
         if [ "$hb_armed" = "1" ]; then
             msg="🛡 camtrap: armed at $(local_time "$now") — the room is being watched"
         else

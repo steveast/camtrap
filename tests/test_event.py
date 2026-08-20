@@ -135,3 +135,43 @@ def test_an_id_already_on_disk_is_not_reused(cfg):
     writer.observe(_frame(), now=0.0)
     event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
     assert event.event_id != "evt_20260813T221320Z"
+
+
+def test_manifest_exists_from_the_moment_the_event_starts(writer, cfg):
+    """A tamper event whose agent dies mid-run must still arrive typed, not as plain motion."""
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.TAMPER, now=1.0, frame=_frame(), signals=["ac_offline"])
+    manifest_path = cfg.spool_dir / f"{event.event_id}.json"
+    assert manifest_path.exists(), "no manifest until close = a lost tamper classification"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["type"] == "tamper"
+    assert manifest["signals"] == ["ac_offline"]
+    assert manifest["closed"] is False
+
+
+def test_closing_marks_the_manifest_closed(writer, cfg):
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    closed = writer.close(now=40.0)
+    manifest = json.loads((cfg.spool_dir / f"{closed.event_id}.json").read_text())
+    assert manifest["closed"] is True
+    assert manifest["id"] == event.event_id
+
+
+def test_escalation_to_tamper_is_persisted_immediately(writer, cfg):
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    writer.begin(EventKind.TAMPER, now=5.0, signals=["lid_closed"])
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["type"] == "tamper"
+    assert "lid_closed" in manifest["signals"]
+    assert manifest["closed"] is False
+
+
+def test_sound_is_recorded_in_the_manifest_without_waiting_for_close(writer, cfg):
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.TAMPER, now=0.0, frame=_frame(), signals=["ac_offline"])
+    writer.mark_sound(stage="siren", latency_ms=900, evidence_confirmed=False)
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["sound_stage"] == "siren"
+    assert manifest["sound_played"] is True

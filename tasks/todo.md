@@ -177,6 +177,26 @@ systemd unit, and arming keys on the room going quiet instead of on a screen loc
       the clock, and a room that never quiets arms at the 300 s deadline anyway.
 - [x] **G.4** Poller announces arming transitions: 🛡 when it takes hold, 🔓 when it stops.
 
+## Independent verification, 2026-08-20
+
+Ran by the agent rather than the owner, which is how these three were found — all in code paths
+the unit tests had not been asked about:
+
+1. **Delivery could kill the whole trap.** A plain file where the inbox directory belonged raised
+   FileExistsError out of the sink, through the capture path, and the process died. Frames stopped,
+   siren stopped. Now: sinks report instead of raising, the uploader treats a sink as untrusted
+   code, and housekeeping can never end the loop — detection and sound outrank delivery.
+2. **A tamper event could arrive as plain motion.** The manifest was only written on close, so an
+   agent killed mid-event (battery out, laptop carried off) delivered frames with no type and no
+   signals. Now the manifest is written at begin, refreshed on escalation and on sound, and marked
+   `closed: false` — which the poller now reports as "event was still running".
+3. **`guard watch` did not exist.** The command was wired in the CLI but the function was never
+   added, so the 30-minute empty-room test would have failed with ImportError at the moment it was
+   needed. Written, and verified by running it.
+
+Also fixed: the poller announced "no longer armed" on its very first tick (noise), and test modes
+wrote frames into the cloud sync folder.
+
 ## Checkpoint status
 
 - **Checkpoint 1 — PASSED (2026-08-20).** Siren audible from the built-in speakers, silencing
