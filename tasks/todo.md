@@ -102,16 +102,16 @@ here on every detector mistake is audible in the corridor.
 
 ## S3 · Frame reaches the receiver and is acknowledged (5 h, deps: S2)
 
-- [ ] **S3.1** `deploy/prod/camtrap-recv.sh` — POSIX sh, `set -eu`, forced command, frame → inbox,
+- [x] **S3.1** `deploy/prod/camtrap-recv.sh` — POSIX sh, `set -eu`, forced command, frame → inbox,
       state/heartbeat update, one tick line. Defines the wire contract, so it comes first. *Done when*
       `sh -n` passes and a local run against a temp inbox stores a frame.
-- [ ] **S3.2** `uploader.py` — ssh transport plus local-directory sink for tests, backoff capped at
+- [x] **S3.2** `uploader.py` — ssh transport plus local-directory sink for tests, backoff capped at
       `UPLOAD_RETRY_MAX_SEC`, **spool deletion only on `prod` ack**. *Done when* an unreachable sink
       leaves the spool untrimmed and restoring it drains in priority order.
-- [ ] **S3.3** `mega` sink — copy into `~/MEGA/camtrap/`, own retention, never counts as an ack.
+- [x] **S3.3** `mega` sink — copy into `~/MEGA/camtrap/`, own retention, never counts as an ack.
       *Done when* tests prove `prod` failure does not stop the copy, a missing `~/MEGA` does not stop
       the upload, and a `mega`-only copy never frees a frame.
-- [ ] **S3.4** Mid-batch failure resumes without duplicates.
+- [x] **S3.4** Mid-batch failure resumes without duplicates.
 
 ---
 
