@@ -19,10 +19,10 @@ STATE_DIR="${CAMTRAP_STATE_DIR:-/var/lib/camtrap-poll}"
 HB_STALE_SEC="${HB_STALE_SEC:-300}"
 REPEAT_SEC="${REPEAT_SEC:-1800}"
 TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
-# A curtain moving on a windy afternoon produces an event every few minutes. Photographing each
-# one into a private chat is how notifications get muted, so ordinary motion is capped and the
-# remainder arrives as one hourly summary. Tamper is never capped.
-MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-6}"
+# Unlimited by default: the owner's call — more information beats fewer notifications, and a
+# missed event cannot be recovered from a summary. Set MOTION_ALERTS_PER_HOUR to a positive
+# number to cap ordinary motion (tamper is never capped) if the flow becomes unusable.
+MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
 SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
@@ -90,6 +90,8 @@ motion_recent() {
 
 motion_budget_left() {
     now=$1
+    # 0 (the default) means no cap at all.
+    [ "$MOTION_ALERTS_PER_HOUR" -le 0 ] && return 0
     used=$(motion_recent "$now" | grep -c . || true)
     [ "$used" -lt "$MOTION_ALERTS_PER_HOUR" ]
 }

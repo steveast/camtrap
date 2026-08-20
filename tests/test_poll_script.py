@@ -274,8 +274,19 @@ def test_a_closed_event_carries_no_such_note(rig):
     assert "still running" not in body
 
 
-def test_ordinary_motion_is_capped_per_hour(rig):
-    """A windy afternoon must not put twenty photos in a private chat."""
+def test_every_event_is_sent_by_default(rig):
+    """The owner's call: no cap. A missed event cannot be recovered from a summary."""
+    for index in range(7):
+        rig.add_event(f"evt_2026082019{index:02d}00Z", "motion", frames=3)
+        rig.run()
+    photos = [n for n in rig.sent() if n.startswith("photo-")]
+    assert len(photos) == 7, f"all seven must be sent, got {len(photos)}"
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    assert not [b for b in bodies if "not sent individually" in b], "no summary when uncapped"
+
+
+def test_the_cap_can_still_be_switched_on(rig):
+    """Kept as a valve for a hotel room where a curtain fires every two minutes."""
     rig.env["MOTION_ALERTS_PER_HOUR"] = "3"
     for index in range(6):
         rig.add_event(f"evt_2026082014{index:02d}00Z", "motion", frames=3)
