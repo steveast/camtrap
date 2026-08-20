@@ -81,10 +81,10 @@ does the thing ranked first.
       `WARMUP_SEC`, ignore mask, `GLOBAL_CHANGE_PCT` → `light`. *Done when* synthetic tests pass:
       triggers on a moving rectangle, silent on noise, brightness step classified `light`, mask
       respected, nothing during warm-up.
-- [ ] **S2.3** `event.py` — `PREBUFFER_FRAMES` ring at 1/s, `SNAPSHOT_INTERVAL`, `EVENT_GAP`,
+- [x] **S2.3** `event.py` — `PREBUFFER_FRAMES` ring at 1/s, `SNAPSHOT_INTERVAL`, `EVENT_GAP`,
       `MAX_FRAMES_PER_EVENT` + `truncated`, JSON manifest. *Done when* 60 s of continuous motion
       yields exactly 12 frames plus pre-buffer, and a trigger on frame N includes N-5…N.
-- [ ] **S2.4** `spool.py` — priorities (first frame and manifest first, `tamper` ahead of all),
+- [x] **S2.4** `spool.py` — priorities (first frame and manifest first, `tamper` ahead of all),
       `SPOOL_MAX_MB`, drop from the middle, never the first frame, every drop logged,
       `RETENTION_DAYS`. *Done when* forced overflow keeps first frames and logs each drop.
 - [ ] **S2.5** `camtrap calibrate` and `camtrap mask`. *Done when* calibrate prints a recommended
