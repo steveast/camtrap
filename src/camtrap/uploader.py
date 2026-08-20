@@ -12,6 +12,7 @@ One sink failing must not stop the other, and a frame stays in the spool until `
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import time
@@ -61,12 +62,20 @@ class ProdSink:
             argv, input=payload, capture_output=True, timeout=timeout, check=False
         )
 
+    def _control_path(self) -> str:
+        if self.cfg.upload.ssh_control_path:
+            return self.cfg.upload.ssh_control_path
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+        return f"{runtime}/camtrap-ssh-%C"
+
     def _argv(self, verb: str) -> list[str]:
         upload = self.cfg.upload
         argv = list(upload.ssh_cmd)
         if upload.ssh_key:
             argv += ["-i", upload.ssh_key]
         argv += list(upload.ssh_options)
+        if any("ControlMaster" in option for option in upload.ssh_options):
+            argv += ["-o", f"ControlPath={self._control_path()}"]
         argv += [upload.ssh_target, verb]
         return argv
 

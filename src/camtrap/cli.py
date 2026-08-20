@@ -279,13 +279,37 @@ def cmd_install(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _publish_mode(cfg: config_mod.Config) -> bool:
+    """Push one heartbeat so the receiver — and therefore the poller — learns the new mode.
+
+    Writing the mode locally is not enough: if the agent is not running, no heartbeat follows, the
+    poller keeps seeing `armed`, and it reports "the agent went silent" for an offline the owner
+    asked for. The spec says pause marks the expected offline ON THE RECEIVER, so it has to travel.
+    """
+    from . import heartbeat as heartbeat_mod
+    from .spool import Spool
+    from .uploader import Uploader
+
+    uploader = Uploader(cfg, Spool(cfg))
+    line = heartbeat_mod.build(cfg, started=0.0, now=0.0).render()
+    ok = uploader.heartbeat(line)
+    log.emit("mode_published", ok=ok)
+    return ok
+
+
 def cmd_pause(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     state.write_mode(cfg.root, state.MODE_PAUSED)
+    if not _publish_mode(cfg):
+        print("warning: could not tell the receiver — the poller may still report silence")
+        return 1
+    print("paused; the receiver knows this offline is expected")
     return 0
 
 
 def cmd_resume(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     state.write_mode(cfg.root, state.MODE_ARMED)
+    _publish_mode(cfg)
+    print("resumed")
     return 0
 
 

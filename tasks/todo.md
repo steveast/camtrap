@@ -202,7 +202,10 @@ wrote frames into the cloud sync folder.
 - **Checkpoint 1 — PASSED (2026-08-20).** Siren audible from the built-in speakers, silencing
   defeated, machine stays awake on a closed lid and a power press.
 - Checkpoint 2 — 30-minute empty-room run, not yet done.
-- Checkpoint 3 — boxes untouched, awaiting review of recv/tg/poll.
+- **Checkpoint 3 — PASSED (2026-08-20).** Receiver on the VPS, poller on the Pi, two restricted
+  keys, cron every 2 minutes. Verified: the laptop key can put frames but `list` and arbitrary
+  commands are refused; the Pi key can read state but `put-frame` is refused; a real frame reached
+  Telegram as a photo; pause reaches the receiver so the poller stays quiet.
 - Checkpoint 4 — 24-hour empty-room run, the gate that decides whether the trap travels.
 
 ## What is left, and why code cannot close it
@@ -212,8 +215,7 @@ wrote frames into the cloud sync folder.
 - **S1.11** intelligibility — a native speaker has to listen to `warn-vi.ogg` and `warn-th.ogg`.
   Longest lead time in the whole plan.
 - **S2.7** 30-minute empty-room run — checkpoint 2 (zero events, zero warnings).
-- **S3/S4 deployment** — new ssh keys, `camtrap-recv.sh`, `camtrap-tg.sh` and the cron file on the
-  boxes. Held at checkpoint 3 by the owner's own rule: nothing is installed there without review.
+- ~~S3/S4 deployment~~ — done 2026-08-20. Details in `TRIP.local.md` (not in git).
 - **S6.4** 24-hour empty-room run — checkpoint 4, the gate that decides whether the trap travels.
 
 ## Open questions that block work

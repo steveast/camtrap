@@ -291,3 +291,34 @@ def test_heartbeat_survives_an_exploding_sink(cfg, spool, capsys):
 
     assert Uploader(cfg, spool, sinks=[Exploding()]).heartbeat("x=1\n") is False
     assert "heartbeat_error" in capsys.readouterr().out
+
+
+def test_ssh_reuses_one_connection_for_a_burst(cfg, monkeypatch):
+    """60 frames must not mean 60 handshakes: the server starts refusing with rc=255."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    cfg.upload.ssh_target = "user@vps"
+    path = _write(cfg, "evt_A_000.jpg", size=8)
+    ssh = FakeSsh(reply=b"")
+    ProdSink(cfg, runner=ssh).send(path)
+    argv = " ".join(ssh.calls[0][0])
+    assert "ControlMaster=auto" in argv
+    assert "ControlPersist=120" in argv
+    assert "ControlPath=/run/user/1000/camtrap-ssh-%C" in argv
+
+
+def test_an_explicit_control_path_is_honoured(cfg, monkeypatch):
+    cfg.upload.ssh_target = "user@vps"
+    cfg.upload.ssh_control_path = "/tmp/my-socket-%C"
+    path = _write(cfg, "evt_A_000.jpg", size=8)
+    ssh = FakeSsh(reply=b"")
+    ProdSink(cfg, runner=ssh).send(path)
+    assert "ControlPath=/tmp/my-socket-%C" in " ".join(ssh.calls[0][0])
+
+
+def test_no_control_path_when_multiplexing_is_disabled(cfg):
+    cfg.upload.ssh_target = "user@vps"
+    cfg.upload.ssh_options = ["-o", "BatchMode=yes"]
+    path = _write(cfg, "evt_A_000.jpg", size=8)
+    ssh = FakeSsh(reply=b"")
+    ProdSink(cfg, runner=ssh).send(path)
+    assert "ControlPath" not in " ".join(ssh.calls[0][0])

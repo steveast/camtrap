@@ -24,6 +24,9 @@ STATE="$CAMTRAP_ROOT/state"
 MAX_BYTES="${CAMTRAP_MAX_BYTES:-8388608}"      # 8 MiB per artefact
 MAX_HEARTBEAT="${CAMTRAP_MAX_HEARTBEAT:-8192}"
 RETENTION_DAYS="${CAMTRAP_RETENTION_DAYS:-14}"
+# Hard ceiling on the inbox. Retention alone is not enough: a detector fooled by a curtain can
+# produce hundreds of events a day, and this box runs someone else's production monitoring.
+MAX_INBOX_MB="${CAMTRAP_MAX_INBOX_MB:-512}"
 
 log() {
     # logger keeps this visible as `journalctl -t camtrap-recv`; stderr is the fallback.
@@ -103,6 +106,18 @@ case "$verb" in
 
         # Retention runs on receipt: no cron on the VPS, nothing to forget to install.
         find "$INBOX" -type f -mtime "+$RETENTION_DAYS" -delete 2>/dev/null || true
+
+        # Then the size ceiling: drop oldest frames first, never manifests — a manifest is a few
+        # hundred bytes and is what makes the remaining frames intelligible.
+        used_mb=$(du -sm "$INBOX" 2>/dev/null | cut -f1)
+        if [ "${used_mb:-0}" -gt "$MAX_INBOX_MB" ]; then
+            ls -1tr "$INBOX" 2>/dev/null | grep '\.jpg$' | while IFS= read -r old; do
+                used_mb=$(du -sm "$INBOX" 2>/dev/null | cut -f1)
+                [ "${used_mb:-0}" -gt "$MAX_INBOX_MB" ] || break
+                rm -f "$INBOX/$old"
+                log "drop name=$old reason=inbox_cap used_mb=$used_mb cap_mb=$MAX_INBOX_MB"
+            done
+        fi
         ;;
 
     *)

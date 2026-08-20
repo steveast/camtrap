@@ -171,8 +171,22 @@ class UploadConfig:
     ssh_target: str = ""
     ssh_key: str = ""
     ssh_options: list[str] = field(
-        default_factory=lambda: ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        default_factory=lambda: [
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            # One connection reused across a burst of frames. Without this every artefact pays a
+            # full handshake — 60 of them on hotel wifi — and the server starts refusing with
+            # rc=255 when they arrive back to back.
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPersist=120",
+        ]
     )
+    #: Multiplexing socket. %C is a hash of host/port/user, so one socket per destination.
+    ssh_control_path: str = ""  # empty => <runtime dir>/camtrap-ssh-%C
     # Test/offline transport: a local directory standing in for the receiver.
     local_inbox: str = ""
     mega_dir: str = ""  # empty => ~/MEGA/camtrap

@@ -115,3 +115,42 @@ def test_no_shell_expansion_from_the_command_string(root, tmp_path):
 def test_script_is_executable_and_has_a_shebang():
     assert SCRIPT.read_text().startswith("#!/bin/sh")
     assert shutil.which("sh")
+
+
+def test_inbox_size_cap_drops_oldest_frames_but_keeps_manifests(root):
+    """The receiver shares a box with someone else's production monitoring: it must not fill it."""
+    inbox = root / "inbox"
+    env_extra = {"CAMTRAP_MAX_INBOX_MB": "1"}
+    # ~1.4 MB of frames plus a manifest, against a 1 MB cap
+    for index in range(7):
+        result = subprocess.run(
+            ["sh", str(SCRIPT)],
+            input=b"x" * 200_000,
+            capture_output=True,
+            env={
+                "SSH_ORIGINAL_COMMAND": f"put-frame evt_20260820T0000{index:02d}Z_000.jpg",
+                "CAMTRAP_ROOT": str(root),
+                "PATH": "/usr/bin:/bin",
+                **env_extra,
+            },
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+    subprocess.run(
+        ["sh", str(SCRIPT)],
+        input=b"{}",
+        capture_output=True,
+        env={
+            "SSH_ORIGINAL_COMMAND": "put-frame evt_20260820T000000Z.json",
+            "CAMTRAP_ROOT": str(root),
+            "PATH": "/usr/bin:/bin",
+            **env_extra,
+        },
+        check=False,
+    )
+    remaining = sorted(p.name for p in inbox.iterdir())
+    assert "evt_20260820T000000Z.json" in remaining, "manifests are never dropped"
+    frames = [n for n in remaining if n.endswith(".jpg")]
+    assert len(frames) < 7, "the oldest frames must have been dropped"
+    # what survived is the newest
+    assert "evt_20260820T000006Z_000.jpg" in frames
