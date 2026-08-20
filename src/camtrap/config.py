@@ -55,6 +55,14 @@ class DetectorConfig:
     # Scene-shift arbitration (3.3): a shift longer than this many pixels means the case moved.
     move_shift_px: float = 12.0
     move_response_min: float = 0.15
+    # Below this greyscale standard deviation a frame carries no structure to correlate — a dark
+    # room, or a wall filling the lens. Phase correlation is meaningless there, so movement is
+    # NOT inferred: refusing to guess costs a missed tamper, guessing costs a siren at 3am.
+    min_texture_std: float = 3.0
+    # Above this share of changed pixels the scene is checked for a global shift. Deliberately
+    # lower than global_change_pct: lifting the laptop can change well under 70 % of the frame
+    # while still moving the whole scene, and that is a tamper, not motion.
+    shift_check_pct: float = 40.0
     als_jump_pct: float = 25.0
 
 

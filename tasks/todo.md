@@ -77,7 +77,7 @@ does the thing ranked first.
 - [ ] **S2.1** `camera.py` — MJPG 1280×720; the driver offers **only 30 fps for MJPG** (10 fps for
       YUYV), so 5 fps is decimation in code; retry on USB drop. *Done when* a 60 s capture yields
       ~300 decoded frames and survives an unplug/replug.
-- [ ] **S2.2** `detector.py` — MOG2 on blurred greyscale, `MIN_AREA_PCT`, `MIN_MOTION_FRAMES`,
+- [x] **S2.2** `detector.py` — MOG2 on blurred greyscale, `MIN_AREA_PCT`, `MIN_MOTION_FRAMES`,
       `WARMUP_SEC`, ignore mask, `GLOBAL_CHANGE_PCT` → `light`. *Done when* synthetic tests pass:
       triggers on a moving rectangle, silent on noise, brightness step classified `light`, mask
       respected, nothing during warm-up.
@@ -135,7 +135,7 @@ new ssh keys, install, cron (spec §8). Deployment order: receiver → sender �
 
 ## S5 · Tamper from the camera: lifted case vs switched light (4 h, deps: S1 + S2)
 
-- [ ] **S5.1** `cv2.phaseCorrelate` on normalised greyscale, `MOVE_SHIFT_PX`; degenerate correlation
+- [x] **S5.1** `cv2.phaseCorrelate` on normalised greyscale, `MOVE_SHIFT_PX`; degenerate correlation
       with a fully changed frame → `tamper`. *Done when* synthetic shift → `tamper`, brightness step
       → `light`, smeared frame → `tamper`.
 - [ ] **S5.2** ALS arbiter on `in_illuminance_raw` of both sensors, including the case where it
