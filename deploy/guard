@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# guard — start the camera trap before leaving the room, stop it when back.
+#
+# A launcher, not a build artefact: it lives in ~/MEGA/os/apps alongside the other one-kilobyte
+# scripts and calls the agent from its venv. Deliberately NOT a compiled binary — a PyInstaller
+# bundle with OpenCV is ~200 MB, and this folder syncs to the cloud.
+#
+# Source of truth is the repository; install with deploy/install-guard.sh.
+set -euo pipefail
+
+REPO="${CAMTRAP_REPO:-$HOME/Dev/camtrap}"
+VENV="${CAMTRAP_VENV:-${XDG_DATA_HOME:-$HOME/.local/share}/camtrap/venv}"
+PY="$VENV/bin/python"
+
+if [ ! -x "$PY" ]; then
+    PY="$REPO/.venv/bin/python"
+fi
+if [ ! -x "$PY" ]; then
+    echo "guard: no venv found." >&2
+    echo "       run $REPO/deploy/install-laptop.sh first" >&2
+    exit 1
+fi
+
+run() { PYTHONPATH="$REPO/src" "$PY" -m camtrap "$@"; }
+
+case "${1:-arm}" in
+    arm|"")
+        # The default: check everything, then arm once the room goes quiet.
+        shift || true
+        run guard "$@"
+        ;;
+    off|stop)
+        # Coming back for good: pause first so the poller does not report "went silent".
+        run pause
+        pkill -f "camtrap.*(run|guard)" 2>/dev/null || true
+        echo "guard: stopped and paused"
+        ;;
+    status)  shift || true; run status "$@" ;;
+    check)   shift || true; run preflight "$@" ;;
+    test)    run siren-test; run warn-test ;;
+    sounds)  "$REPO/tools/make-siren.sh" --mode "${SIREN_MODE:-yelp}"
+             exec "$REPO/tools/make-warning.sh" --all ;;
+    calibrate) shift || true; run calibrate "$@" ;;
+    mask)    shift || true; run mask "$@" ;;
+    logs)    exec journalctl --user -t camtrap -n "${2:-100}" ;;
+    -h|--help|help)
+        cat <<'USAGE'
+guard — laptop camera trap
+
+  guard              preflight, then arm when the room goes quiet, then run
+  guard --still 15   arm after 15 s of quiet instead of the default 30
+  guard off          stop and mark the offline as expected
+  guard status       mode, arming state, spool, sound readiness
+  guard check        preflight only: camera, sounds, speakers, receiver, no-sleep
+  guard test         play the siren and the spoken warning (loud)
+  guard sounds       regenerate siren.ogg and warn-*.ogg
+  guard calibrate    measure this room's noise floor, recommend a threshold
+  guard mask         capture a reference frame for the ignore mask
+  guard logs [N]     the agent's journal
+
+Leaving:  run `guard`, take your things, walk out. It arms itself once the room is still.
+Coming back: unlock the screen — that disarms it. `guard off` when you are done for good.
+USAGE
+        ;;
+    # A leading flag means "arm, with options" — `guard --still 15`, not a passthrough.
+    -*) run guard "$@" ;;
+    *) run "$@" ;;
+esac

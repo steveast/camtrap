@@ -160,6 +160,20 @@ whether the trap travels.
 
 ---
 
+## Added after the plan: manual start
+
+The owner starts the trap by hand on the way out, so `guard` is the entry point rather than the
+systemd unit, and arming keys on the room going quiet instead of on a screen lock.
+
+- [x] **G.1** `deploy/guard` launcher, installed into `~/MEGA/os/apps` (on PATH) and `~/.local/bin`
+      as a fallback. A launcher, not a compiled bundle: that folder holds one-kilobyte scripts and
+      syncs to the cloud, while a PyInstaller build with OpenCV is ~200 MB.
+- [x] **G.2** `camtrap preflight` — camera, sound files and a real quiet burst through the speakers
+      are blocking; a missing receiver is only a warning.
+- [x] **G.3** `arming.mode = "on_still"` — arms once the frame is quiet for 30 s, movement restarts
+      the clock, and a room that never quiets arms at the 300 s deadline anyway.
+- [x] **G.4** Poller announces arming transitions: 🛡 when it takes hold, 🔓 when it stops.
+
 ## What is left, and why code cannot close it
 
 - **S1.8** physical pass — pull the cable, close the lid, press mute mid-burst, press power. Needs

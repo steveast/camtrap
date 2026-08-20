@@ -82,9 +82,13 @@ state=$(remote state || true)
 hb_age=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "hb_age" {print $2}' | tail -1)
 hb_mode=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "mode" {print $2}' | tail -1)
 hb_sound=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "sound_ok" {print $2}' | tail -1)
+hb_armed=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "armed" {print $2}' | tail -1)
+hb_reason=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "arm_reason" {print $2}' | tail -1)
 : "${hb_age:=-1}"
 : "${hb_mode:=unknown}"
 : "${hb_sound:=1}"
+: "${hb_armed:=-}"
+: "${hb_reason:=-}"
 
 # Event ids present remotely, tamper first: the owner reacts differently to "someone came in"
 # and to "the laptop is in someone's hands".
@@ -165,6 +169,24 @@ elif [ "$hb_age" -gt "$HB_STALE_SEC" ] && [ "$hb_mode" != "paused" ]; then
     fi
 else
     note_recovery hb "🟢 camtrap: heartbeat is back (age ${hb_age}s)"
+fi
+
+# Arming transitions: the owner walks out and wants to know the trap actually took hold, and
+# wants to know just as much when it stops being armed.
+if [ "$hb_armed" != "-" ]; then
+    prev="-"
+    [ -f "$STATE_DIR/last-armed" ] && prev=$(cat "$STATE_DIR/last-armed")
+    if [ "$hb_armed" != "$prev" ]; then
+        if [ "$hb_armed" = "1" ]; then
+            msg="🛡 camtrap: armed at $(local_time "$now") — the room is being watched"
+        else
+            msg="🔓 camtrap: no longer armed ($hb_reason)"
+        fi
+        if send_message "$msg"; then
+            printf '%s\n' "$hb_armed" > "$STATE_DIR/last-armed"
+            log "armed_change value=$hb_armed reason=$hb_reason"
+        fi
+    fi
 fi
 
 if [ "$hb_mode" = "armed" ] && [ "$hb_sound" = "0" ]; then

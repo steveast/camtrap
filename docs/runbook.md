@@ -25,6 +25,20 @@ Four things that are easy to skip and expensive to skip:
 4. **Decide the languages** — `sound.warn_langs = ["vi", "en"]` for Vietnam, `["th", "en"]` for
    Thailand. Local language first; English alone is a coin flip with housekeeping.
 
+## Every time you leave the room
+
+```sh
+guard
+```
+
+It runs the preflight, refuses to arm if the camera or the speakers fail, then waits for the room
+to be still for 30 s and arms behind you. A 🛡 message in Telegram confirms it took hold; 🔓 arrives
+when it stops being armed.
+
+Coming back: **unlock the screen** — that disarms it for `GRACE_AFTER_UNLOCK_SEC` and nothing
+sounds. Done for the day: `guard off` (stops and marks the offline as expected, so the poller does
+not report silence).
+
 ## On arrival, before the first arming
 
 ```sh

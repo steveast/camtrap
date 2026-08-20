@@ -488,6 +488,9 @@ case every time they picked it up. Capture continues throughout — only an expl
 ## 4. Commands
 
 ```
+guard                       the way it is actually started: preflight, arm when still, run
+camtrap guard [--still N]   same thing without the launcher
+camtrap preflight           would this trap survive being left alone? refuses on a failure
 camtrap run                 main mode (used by the systemd unit)
 camtrap selftest            camera, detector, key to the VPS, inbox reachability, audio
 camtrap calibrate [--sec N] N seconds of noise statistics, prints a recommended MIN_AREA_PCT
@@ -502,6 +505,12 @@ camtrap pause | resume      expected offline
 camtrap status              local state: mode, spool, last heartbeat, sound files, languages
 camtrap install             installs and enables the systemd --user unit
 ```
+
+**`preflight` refuses rather than warns.** Camera, sound files and a real burst through the
+speakers are blocking; a missing receiver is not, because frames still accumulate locally and the
+siren needs no network. The audio probe plays the siren for `audio_probe_sec` at
+`audio_probe_volume_pct` — checking that a file exists proves nothing about whether the sink still
+routes to the speakers, and 0.4 s at 20 % does not announce itself to the corridor.
 
 `selftest` and `calibrate` are mandatory at home before departure. Tuning the detector in a
 hotel room on the first evening is a reliable way to travel with a trap that does not work.

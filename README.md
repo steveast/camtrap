@@ -32,10 +32,23 @@ fires — is in [docs/runbook.md](docs/runbook.md).
 
 ```sh
 deploy/install-laptop.sh     # venv, sounds, systemd --user unit
-camtrap selftest             # camera, audio path, arming, inhibitors, receiver
-camtrap siren-test            # loud, from the built-in speakers
-camtrap warn-test             # intelligible in the local language
+deploy/install-guard.sh      # the `guard` launcher, onto PATH
+guard check                  # camera, sounds, a real quiet burst through the speakers
+guard test                   # the siren and the warning, at full volume
 ```
+
+## Leaving the room
+
+```sh
+guard            # preflight, then arm once the room has been still for 30 s
+guard off        # back for good: stop, and mark the offline as expected
+```
+
+`guard` is started by hand, on the way out. It refuses to arm if the camera, the sound files or
+the speakers fail their check — walking away believing in a trap that cannot shout is worse than
+knowing it is broken. Then it waits for the room to go quiet rather than counting down a fixed
+delay: take what you need, leave, and it arms behind you. Coming back, unlock the screen — that
+disarms it and opens a grace window, so picking the laptop up does not set off a siren.
 
 ## How it fits together
 

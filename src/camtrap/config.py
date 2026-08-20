@@ -144,10 +144,21 @@ class SoundConfig:
 
 @dataclass
 class ArmingConfig:
-    mode: str = "on_lock"  # on_lock | always | manual
+    # on_lock  — armed once the screen is locked (unattended machine)
+    # on_still — armed once the room has been still for arm_when_still_sec (owner walked out)
+    # always   — armed for the lifetime of the run
+    # manual   — armed only by `camtrap arm`
+    mode: str = "on_lock"
     exit_delay_sec: float = 60.0
     grace_after_unlock_sec: float = 300.0
     session_poll_sec: float = 2.0
+    # on_still: how long the frame has to stay quiet before arming, and the backstop for a room
+    # that never goes quiet (a curtain, a fan) so the trap still ends up armed.
+    arm_when_still_sec: float = 30.0
+    arm_deadline_sec: float = 300.0
+    # A short, quiet burst that proves the path to the speakers actually carries audio.
+    audio_probe_sec: float = 0.4
+    audio_probe_volume_pct: int = 20
 
 
 @dataclass

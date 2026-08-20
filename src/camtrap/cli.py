@@ -55,6 +55,55 @@ def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return run_forever(cfg)
 
 
+def cmd_preflight(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Everything that must hold before walking out of the room."""
+    from .runner import preflight
+
+    ready, rows = preflight(cfg, probe=not args.no_probe)
+    for name, ok, detail in rows:
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name:12} {detail}")
+    print()
+    if not ready:
+        print("NOT READY — fix the failures above before arming.")
+        print("The point of this check is that leaving with a broken trap is worse than knowing.")
+        return 1
+    print("ready to arm")
+    return 0
+
+
+def cmd_arm_and_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Preflight, then arm once the room goes quiet, then run. The command for walking out."""
+    import time as _time
+
+    from .runner import preflight, run_forever
+
+    print("camtrap — preflight")
+    ready, rows = preflight(cfg, probe=not args.no_probe)
+    for name, ok, detail in rows:
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name:12} {detail}")
+    print()
+    if not ready:
+        print("NOT READY — nothing was armed. Fix the failures above.")
+        return 1
+
+    cfg.arming.mode = "on_still"
+    if args.still is not None:
+        cfg.arming.arm_when_still_sec = args.still
+    state.write_mode(cfg.root, state.MODE_ARMED)
+
+    quiet = int(cfg.arming.arm_when_still_sec)
+    print(f"Armed as soon as the room is still for {quiet} s.")
+    print("Take what you need and leave; the alarm waits for the room to empty.")
+    print(
+        f"Warning on motion in {','.join(cfg.sound.warn_langs) or 'no languages'}, "
+        f"siren at {cfg.sound.volume_pct}% on tampering."
+    )
+    print("Unlock the screen when you come back — that disarms it.")
+    print()
+    _time.sleep(1.0)
+    return run_forever(cfg)
+
+
 def cmd_siren_test(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     from .runner import sound_selftest
 
@@ -223,6 +272,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="main mode (used by the systemd unit)")
     run.set_defaults(func=cmd_run)
+
+    preflight_cmd = sub.add_parser("preflight", help="is this trap fit to be left alone?")
+    preflight_cmd.add_argument("--no-probe", action="store_true", help="skip the audio probe")
+    preflight_cmd.set_defaults(func=cmd_preflight)
+
+    guard = sub.add_parser("guard", help="preflight, arm when the room goes quiet, then run")
+    guard.add_argument("--still", type=float, default=None, help="seconds of quiet before arming")
+    guard.add_argument("--no-probe", action="store_true", help="skip the audio probe")
+    guard.set_defaults(func=cmd_arm_and_run)
 
     siren_test = sub.add_parser("siren-test", help="play the siren into the configured sink")
     siren_test.set_defaults(func=cmd_siren_test)

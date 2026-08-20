@@ -216,3 +216,24 @@ def test_missing_required_env_fails_loudly(rig):
     result = subprocess.run(["sh", str(SCRIPT)], capture_output=True, env=env, check=False)
     assert result.returncode != 0
     assert b"TELEGRAM_BOT_TOKEN" in result.stderr
+
+
+def test_arming_transitions_are_announced(rig):
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=0, arm_reason="waiting_for_quiet")
+    rig.run()
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=1, arm_reason="-")
+    rig.run()
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    assert any("🛡" in body and "armed at" in body for body in bodies)
+
+
+def test_disarming_is_announced_once(rig):
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=1, arm_reason="-")
+    rig.run()
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5, armed=0, arm_reason="unlock_grace")
+    rig.run()
+    before = len([n for n in rig.sent() if n.startswith("message-")])
+    rig.run()  # unchanged: no repeat
+    assert len([n for n in rig.sent() if n.startswith("message-")]) == before
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    assert any("🔓" in body and "unlock_grace" in body for body in bodies)

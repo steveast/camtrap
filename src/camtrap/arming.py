@@ -85,6 +85,8 @@ class Arming:
         self._locked_since: float | None = None
         self._unlocked_at: float | None = None
         self._started: float | None = None
+        self._last_activity: float | None = None
+        self._still_since: float | None = None
         manual = state.read_manual_arm(cfg.root)
         self._manual_since: float | None = manual
 
@@ -100,6 +102,16 @@ class Arming:
     def disarm_manually(self) -> None:
         state.clear_manual_arm(self.cfg.root)
         self._manual_since = None
+
+    def note_activity(self, *, now: float) -> None:
+        """The detector saw movement: the owner is (probably) still in the room."""
+        self._last_activity = now
+        self._still_since = None
+
+    def note_quiet(self, *, now: float) -> None:
+        """A frame with nothing happening in it; starts the stillness clock."""
+        if self._still_since is None:
+            self._still_since = now
 
     def poll(self, *, now: float) -> None:
         locked = self._session.locked_hint()
@@ -121,12 +133,26 @@ class Arming:
 
     # --- the gate ------------------------------------------------------------
 
-    def armed_since(self) -> float | None:
-        """Timestamp from which the alarm counts as armed, or None."""
+    def armed_since(self, now: float | None = None) -> float | None:
+        """Timestamp from which the alarm counts as armed, or None.
+
+        `now` is needed for on_still, which arms a fixed interval after the room went quiet.
+        """
         mode = self.cfg.arming.mode
         candidates: list[float] = []
         if self._manual_since is not None:
             candidates.append(self._manual_since)
+        if mode == "on_still" and now is not None:
+            still_for = self.cfg.arming.arm_when_still_sec
+            if self._still_since is not None and now - self._still_since >= still_for:
+                candidates.append(self._still_since + still_for)
+            elif (
+                self._started is not None
+                and now - self._started >= self.cfg.arming.arm_deadline_sec
+            ):
+                # The room never went quiet — a curtain, a fan, a street window. Arm anyway
+                # rather than leaving the trap disarmed for the whole trip.
+                candidates.append(self._started + self.cfg.arming.arm_deadline_sec)
         if mode == "always":
             # Armed for the lifetime of the run; the exit delay is measured from start() so a
             # unit restart while the owner is in the room does not sound immediately.
@@ -149,17 +175,19 @@ class Arming:
         if unlocked_at is not None and now - unlocked_at < self.cfg.arming.grace_after_unlock_sec:
             return False, "unlock_grace"
 
-        since = self.armed_since()
+        since = self.armed_since(now)
         if since is None:
-            return False, "not_armed"
-        if now - since < self.cfg.arming.exit_delay_sec:
+            return False, "waiting_for_quiet" if self.cfg.arming.mode == "on_still" else "not_armed"
+        # on_still already waited for the room to empty; no second delay on top of it.
+        delay = 0.0 if self.cfg.arming.mode == "on_still" else self.cfg.arming.exit_delay_sec
+        if now - since < delay:
             return False, "exit_delay"
         return True, ""
 
     # --- introspection -------------------------------------------------------
 
     def describe(self, *, now: float) -> dict[str, object]:
-        since = self.armed_since()
+        since = self.armed_since(now)
         allowed, reason = self.gate(Stage.SIREN, now)
         return {
             "mode": self.cfg.arming.mode,

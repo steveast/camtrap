@@ -149,3 +149,53 @@ def test_warning_can_be_held_while_the_siren_is_allowed(cfg, session):
     arming.start(now=-100.0)
     assert not arming.gate(Stage.WARNING, now=0.0)[0]
     assert arming.gate(Stage.SIREN, now=0.0)[0]
+
+
+# --- on_still: the mode for "I start it myself and walk out" ------------------------------------
+
+
+@pytest.fixture
+def still(cfg, session):
+    cfg.arming.mode = "on_still"
+    cfg.arming.arm_when_still_sec = 30.0
+    cfg.arming.arm_deadline_sec = 300.0
+    cfg.detector.warmup_sec = 0.0
+    arming = Arming(cfg, session=session)
+    arming.start(now=0.0)
+    return arming
+
+
+def test_on_still_waits_for_the_room_to_empty(still):
+    still.note_activity(now=1.0)  # the owner is still here, collecting their things
+    assert still.gate(Stage.SIREN, now=5.0) == (False, "waiting_for_quiet")
+    still.note_quiet(now=10.0)
+    assert still.gate(Stage.SIREN, now=20.0)[1] == "waiting_for_quiet"
+    assert still.gate(Stage.SIREN, now=41.0)[0], "30 s of quiet should arm it"
+
+
+def test_movement_restarts_the_stillness_clock(still):
+    still.note_quiet(now=0.0)
+    still.note_activity(now=20.0)  # came back for the charger
+    assert not still.gate(Stage.SIREN, now=35.0)[0]
+    still.note_quiet(now=40.0)
+    assert not still.gate(Stage.SIREN, now=60.0)[0]
+    assert still.gate(Stage.SIREN, now=71.0)[0]
+
+
+def test_a_room_that_never_goes_quiet_still_arms_eventually(still):
+    for tick in range(0, 400, 5):
+        still.note_activity(now=float(tick))
+    # a curtain moving all day must not leave the trap disarmed for the whole trip
+    assert still.gate(Stage.SIREN, now=400.0)[0]
+
+
+def test_on_still_does_not_add_a_second_exit_delay(still):
+    still.note_quiet(now=0.0)
+    allowed, _reason = still.gate(Stage.SIREN, now=30.5)
+    assert allowed, "the wait for quiet IS the exit delay"
+
+
+def test_pause_still_wins_in_on_still_mode(still, cfg):
+    still.note_quiet(now=0.0)
+    write_mode(cfg.root, MODE_PAUSED, now=1.0)
+    assert still.gate(Stage.SIREN, now=100.0) == (False, "paused")

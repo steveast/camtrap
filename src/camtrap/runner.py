@@ -8,13 +8,14 @@ warning, tampering produces the siren.
 from __future__ import annotations
 
 import signal
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import log
+from . import log, sounds
 from . import tamper as tamper_mod
 from .arming import Arming
 from .camera import Camera
@@ -109,6 +110,11 @@ class Runner:
         self.stats.frames += 1
         self.events.observe(frame, now=now)
         detection = self.detector.submit(frame, now=now)
+
+        if detection.kind is EventKind.NONE:
+            self.arming.note_quiet(now=now)
+        else:
+            self.arming.note_activity(now=now)
 
         if detection.kind is EventKind.MOTION:
             self.stats.motion_events += 1
@@ -260,6 +266,76 @@ def run_forever(cfg: Config) -> int:
                 warnings=runner.stats.warnings,
             )
     return 0
+
+
+def audio_probe(cfg: Config) -> tuple[bool, str]:
+    """Play a short, quiet burst to prove the path to the speakers actually carries audio.
+
+    Checking that a file exists proves nothing: the sink can be gone, the profile wrong, the
+    output muted at the ALSA level. This is the cheapest way to find that out before walking away,
+    and at 20 % for 0.4 s it does not announce itself to the corridor.
+    """
+    from .player import AudioPath
+
+    path = AudioPath(cfg)
+    sink = path.prepare(volume_pct=cfg.arming.audio_probe_volume_pct)
+    if not sink:
+        return False, "no sink"
+    target = cfg.siren_path if cfg.siren_path.exists() else None
+    if target is None:
+        return False, "no siren file"
+    argv = [*cfg.sound.player_cmd, "--target", sink, str(target)]
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as exc:
+        return False, str(exc)
+    time.sleep(cfg.arming.audio_probe_sec)
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return True, f"{sink} (probe cut short as intended)"
+    stderr = (proc.stderr.read() if proc.stderr else b"").decode(errors="replace").strip()
+    if proc.returncode not in (0, -15, 143):
+        return False, stderr[:120] or f"player exited {proc.returncode}"
+    return True, sink
+
+
+def preflight(cfg: Config, *, probe: bool = True) -> tuple[bool, list[tuple[str, bool, str]]]:
+    """Everything that must hold before the owner walks out of the room.
+
+    Returns (ready, rows). A False here is the whole point of the command: leaving with a trap
+    that cannot see, cannot shout or cannot deliver is worse than knowing it is broken.
+    """
+    from . import selftest
+
+    rows: list[tuple[str, bool, str]] = []
+
+    camera_check = selftest.check_camera(cfg)
+    rows.append(("camera", camera_check.verdict != selftest.FAIL, camera_check.detail))
+
+    missing = sounds.missing_sounds(cfg)
+    rows.append(("sound files", not missing, ",".join(missing) if missing else "siren + warnings"))
+
+    if probe:
+        ok, detail = audio_probe(cfg)
+        rows.append(("speakers", ok, detail))
+    else:
+        rows.append(("speakers", True, "probe skipped"))
+
+    receiver = selftest.check_receiver(cfg)
+    # A missing receiver is a warning, not a blocker: frames still accumulate locally and the
+    # siren does not need the network at all.
+    rows.append(("receiver", receiver.verdict != selftest.FAIL, receiver.detail))
+
+    inhibit = selftest.check_inhibit()
+    rows.append(("no-sleep", inhibit.verdict != selftest.FAIL, inhibit.detail))
+
+    blocking = {"camera", "sound files", "speakers"}
+    ready = all(ok for name, ok, _ in rows if name in blocking)
+    return ready, rows
 
 
 def sound_selftest(cfg: Config, stage: Stage) -> int:
