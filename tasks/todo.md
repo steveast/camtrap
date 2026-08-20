@@ -39,11 +39,11 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 - [x] **S1.3** Hold layer — re-assert the audio path every `SOUND_HOLD_POLL_MS = 250`
       (unmute + volume + profile + auto-mute). *Done when* mute and volume-down pressed mid-burst are
       reverted within one tick, and a headphone jack plugged mid-burst does not silence the speakers.
-- [ ] **S1.4** Hold layer — `loginctl lock-session` on tamper (config flag to disable while
+- [x] **S1.4** Hold layer — `loginctl lock-session` on tamper (config flag to disable while
       iterating, default on) and `systemd-inhibit --what=sleep:idle:handle-lid-switch:handle-power-key`
       held for the lifetime of `camtrap run`. *Done when* a short power press does not stop the
       machine and a closed lid neither sleeps it nor stops the siren.
-- [ ] **S1.5** `arming.py` — `ARM_MODE` (`on_lock` default | `always` | `manual`), `LockedHint`
+- [x] **S1.5** `arming.py` — `ARM_MODE` (`on_lock` default | `always` | `manual`), `LockedHint`
       polling, `ARM_EXIT_DELAY_SEC = 60`, `GRACE_AFTER_UNLOCK_SEC = 300`, `camtrap arm` / `disarm`.
       *Done when* an unlocked session stays silent on a cable pull, and unlocking mid-burst stops the
       siren and suppresses tamper for the grace window.
@@ -54,14 +54,14 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
       `tamper` mid-warning cuts the warning off and starts the siren. **No session lock and no input
       grab on stage 1.** *Done when* tests prove `motion` → warning only, `tamper` → siren only,
       lock requested on tamper alone, and languages played in configured order.
-- [ ] **S1.10** `warn-test` + `sound_ok` covering every language — a missing `warn-<lang>.ogg` for a
+- [x] **S1.10** `warn-test` + `sound_ok` covering every language — a missing `warn-<lang>.ogg` for a
       configured language fails at startup and sets `sound_ok = false`, instead of going quiet at
       event time. *Done when* deleting `warn-th.ogg` with `th` in `WARN_LANGS` turns the check red.
 - [ ] **S1.11** Intelligibility — get a native speaker to listen to `warn-vi.ogg` and `warn-th.ogg`,
       or replace them with better recordings. **Start this first, it has the longest lead time and
       code cannot fix it.** *Done when* each configured language is either confirmed by a speaker or
       replaced.
-- [ ] **S1.7** `camtrap input-scan` — list input devices reporting mute/volume keys; optional
+- [x] **S1.7** `camtrap input-scan` — list input devices reporting mute/volume keys; optional
       `EVIOCGRAB` on **external devices only**, released on fd close. *Done when* the grab survives a
       `kill -9` without leaving input captured.
 - [ ] **S1.8** Physical pass (checks 1–6 in plan.md S1). Iterate at low volume with `SIREN_SEC = 2`,

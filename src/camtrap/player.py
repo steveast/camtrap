@@ -78,7 +78,7 @@ class AudioPath:
 
     def __init__(self, cfg: Config, runner: Runner | None = None) -> None:
         self.cfg = cfg
-        self._run = runner or _default_runner
+        self._run = runner if runner is not None else _default_runner
         self._sink: str | None = None
         self._card: str | None = None
 
@@ -176,9 +176,12 @@ class SoundResponder:
         audio: AudioPath | None = None,
     ) -> None:
         self.cfg = cfg
-        self._run = runner or _default_runner
-        self._spawn = spawn or _default_spawn
-        self.audio = audio or AudioPath(cfg, runner=self._run)
+        # `is not None` rather than `or`: an injected callable may be falsy (a callable list, a
+        # Mock with __bool__), and silently falling back to the real player would spawn pw-play
+        # inside a test run.
+        self._run = runner if runner is not None else _default_runner
+        self._spawn = spawn if spawn is not None else _default_spawn
+        self.audio = audio if audio is not None else AudioPath(cfg, runner=self._run)
         self._gate: Gate = lambda stage, now: (True, "")
         self._ack: AckWaiter | None = None
         self._proc: _Proc | None = None
@@ -270,9 +273,7 @@ class SoundResponder:
     def _play(self, calls: list[PlayCall], *, stage: Stage, now: float) -> None:
         # The duration doubles as a kill timeout: a hung pw-play must not hold the stage.
         duration = (
-            self.cfg.sound.siren_sec
-            if stage is Stage.SIREN
-            else self.cfg.sound.warn_timeout_sec
+            self.cfg.sound.siren_sec if stage is Stage.SIREN else self.cfg.sound.warn_timeout_sec
         )
         argv = list(self.cfg.sound.player_cmd)
         sink = self.audio.sink
