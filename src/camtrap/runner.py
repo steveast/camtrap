@@ -27,7 +27,7 @@ from .heartbeat import build as build_heartbeat
 from .inhibit import Inhibitor
 from .player import SoundResponder, Stage
 from .spool import Spool
-from .state import read_mode
+from .state import MODE_ARMED, MODE_PAUSED, read_mode, write_mode
 from .uploader import Uploader
 
 
@@ -373,13 +373,29 @@ def watch(cfg: Config, *, minutes: float = 30.0, still: float = 10.0) -> int:
     with the siren live would mean a police siren in a flat every time a curtain moved, so sound
     is decided and logged exactly as in a live run, then suppressed at the last step.
     """
-    from .arming import Arming
-
     cfg.sound.dry_run = True
     cfg.arming.mode = "on_still"
     cfg.arming.arm_when_still_sec = still
     # A rehearsal is not evidence: keep test frames out of the cloud sync folder.
     cfg.upload.sinks = [name for name in cfg.upload.sinks if name != "mega"]
+
+    # An observation run in `paused` measures nothing: the gate refuses every stage with
+    # reason=paused before the detector's verdict is ever consulted, so the report comes back
+    # CLEAN without having asked a single question. Arm for the duration, restore on every exit
+    # path — leaving the trap armed after a rehearsal is how a siren goes off at nobody.
+    previous_paused = read_mode(cfg.root).paused
+    if previous_paused:
+        write_mode(cfg.root, MODE_ARMED)
+        print("(temporarily armed for this observation; paused is restored when it ends)")
+    try:
+        return _watch_body(cfg, minutes=minutes, still=still)
+    finally:
+        if previous_paused:
+            write_mode(cfg.root, MODE_PAUSED)
+
+
+def _watch_body(cfg: Config, *, minutes: float, still: float) -> int:
+    from .arming import Arming
 
     missing = sounds.missing_sounds(cfg)
     if missing:

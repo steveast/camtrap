@@ -121,3 +121,19 @@ def test_drill_does_not_write_to_the_cloud_folder(cfg):
     cfg.upload.sinks = ["prod", "mega"]
     assert runner.drill(cfg, seconds=0.01) == 1
     assert cfg.upload.sinks == ["prod"]
+
+
+def test_watch_arms_itself_when_paused_and_restores_after(cfg):
+    """In `paused` the gate refuses every stage before the detector is consulted, so an
+    observation run would report CLEAN without having measured anything."""
+    from camtrap import state
+
+    state.write_mode(cfg.root, state.MODE_PAUSED)
+    cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
+    cfg.siren_path.write_bytes(b"s")
+    for lang in cfg.sound.warn_langs:
+        cfg.warn_path(lang).write_bytes(b"w")
+    cfg.camera.device = "/nonexistent/video9"  # bail out right after arming
+
+    runner.watch(cfg, minutes=0.01)
+    assert state.read_mode(cfg.root).paused, "the paused state must be put back"
