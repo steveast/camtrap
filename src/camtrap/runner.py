@@ -1,7 +1,8 @@
-"""The run loop: poll tamper signals, respond with sound, hold the sound on.
+"""The run loop: capture, detect, slice into events, respond with sound, hold the sound on.
 
-Detection through the camera joins this loop in S2; at this stage the loop already delivers the
-feature ranked first — cable pulled or lid closed produces a siren that a keypress cannot silence.
+The camera drives the cadence and sysfs is polled between frames, so a cable pull is noticed even
+while the detector is busy. Two independent paths converge here: motion in frame produces a spoken
+warning, tampering produces the siren.
 """
 
 from __future__ import annotations
@@ -11,19 +12,28 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from . import log
 from . import tamper as tamper_mod
 from .arming import Arming
+from .camera import Camera
 from .config import Config
+from .detector import Detector, EventKind
+from .event import EventWriter
 from .inhibit import Inhibitor
 from .player import SoundResponder, Stage
+from .spool import Spool
 from .state import read_mode
 
 
 @dataclass
 class LoopStats:
     ticks: int = 0
+    frames: int = 0
     tamper_events: int = 0
+    motion_events: int = 0
+    light_events: int = 0
     warnings: int = 0
     sirens: int = 0
     signals: list[str] = field(default_factory=list)
@@ -40,16 +50,25 @@ class Runner:
         responder: SoundResponder | None = None,
         arming: Arming | None = None,
         inhibitor: Inhibitor | None = None,
+        detector: Detector | None = None,
+        events: EventWriter | None = None,
+        spool: Spool | None = None,
+        camera: Camera | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
         self.monitor = monitor if monitor is not None else tamper_mod.TamperMonitor(cfg)
         self.responder = responder if responder is not None else SoundResponder(cfg)
         self.arming = arming if arming is not None else Arming(cfg)
+        self.detector = detector if detector is not None else Detector(cfg)
+        self.events = events if events is not None else EventWriter(cfg)
+        self.spool = spool if spool is not None else Spool(cfg)
+        self.camera = camera
         self.inhibitor = inhibitor
         self.clock = clock
         self.stats = LoopStats()
         self._stop = False
+        self._last_housekeeping = float("-inf")
         self.responder.set_gate(self.arming.gate)
 
     def request_stop(self, *_: object) -> None:
@@ -62,19 +81,73 @@ class Runner:
         signals = self.monitor.poll(now=now)
         self.stats.ticks += 1
         if signals:
-            self.stats.tamper_events += 1
-            self.stats.signals.extend(s.name for s in signals)
-            if tamper_mod.plays_siren(signals):
-                result = self.responder.on_tamper([s.name for s in signals], now=now)
-                if result.played:
-                    self.stats.sirens += 1
+            self._tamper(signals, now=now)
         return signals
 
     def motion(self, now: float) -> None:
-        """Called by the detector (S2) when motion is confirmed."""
+        """Stage 1: someone is in the room."""
         result = self.responder.on_motion(now=now)
         if result.played:
             self.stats.warnings += 1
+            self.events.mark_sound(
+                stage=Stage.WARNING.value, evidence_confirmed=result.evidence_confirmed
+            )
+
+    # --- camera path ---------------------------------------------------------
+
+    def on_frame(self, frame: np.ndarray, now: float) -> EventKind:
+        """One decimated frame: detect, slice into an event, respond with sound."""
+        self.stats.frames += 1
+        self.events.observe(frame, now=now)
+        detection = self.detector.submit(frame, now=now)
+
+        if detection.kind is EventKind.MOTION:
+            self.stats.motion_events += 1
+            event = self.events.begin(EventKind.MOTION, now=now, frame=frame)
+            self.events.note_motion(now=now)
+            if event.frames_written <= self.cfg.event.prebuffer_frames + 1:
+                self.motion(now)
+        elif detection.kind is EventKind.LIGHT:
+            self.stats.light_events += 1
+            self.events.begin(EventKind.LIGHT, now=now, frame=frame)
+            if self.cfg.sound.warn_on_light:
+                self.motion(now)
+        elif detection.kind is EventKind.TAMPER:
+            signal = self.monitor.report_external(
+                tamper_mod.SCENE_SHIFT, detail=detection.detail, now=now
+            )
+            self._tamper([signal], now=now, frame=frame)
+        else:
+            self.events.feed(frame, now=now)
+
+        closed = self.events.maybe_close(now=now)
+        if closed is not None:
+            self.responder.end_event()
+        self._housekeeping(now)
+        return detection.kind
+
+    def _tamper(self, signals: list[tamper_mod.Signal], *, now: float, frame=None) -> None:
+        self.stats.tamper_events += 1
+        self.stats.signals.extend(s.name for s in signals)
+        names = [s.name for s in signals]
+        event = self.events.begin(EventKind.TAMPER, now=now, frame=frame, signals=names)
+        self.spool.mark_tamper(event.event_id)
+        self.events.note_motion(now=now)
+        if not tamper_mod.plays_siren(signals):
+            return
+        result = self.responder.on_tamper(names, now=now)
+        if result.played:
+            self.stats.sirens += 1
+            self.events.mark_sound(
+                stage=Stage.SIREN.value, evidence_confirmed=result.evidence_confirmed
+            )
+
+    def _housekeeping(self, now: float) -> None:
+        if now - self._last_housekeeping < 60.0:
+            return
+        self._last_housekeeping = now
+        self.spool.enforce_cap()
+        self.spool.enforce_retention()
 
     def run(self, *, max_ticks: int | None = None) -> LoopStats:
         signal.signal(signal.SIGTERM, self.request_stop)
@@ -114,11 +187,47 @@ class Runner:
 
 
 def run_forever(cfg: Config) -> int:
+    """Capture loop plus tamper polling. The camera drives the cadence; sysfs is polled between
+    frames, so a cable pull is noticed even while the detector is busy."""
     with Inhibitor() as inhibitor:
         if not inhibitor.active:
             log.emit("warn", reason="no sleep inhibitor: a closed lid may suspend the machine")
-        runner = Runner(cfg, inhibitor=inhibitor)
-        runner.run()
+        camera = Camera(cfg)
+        runner = Runner(cfg, inhibitor=inhibitor, camera=camera)
+        runner.arming.start(now=runner.clock())
+        log.emit(
+            "start",
+            mode=read_mode(cfg.root).name,
+            arming=cfg.arming.mode,
+            langs=",".join(cfg.sound.warn_langs) or "-",
+            inhibit=inhibitor.active,
+        )
+        signal.signal(signal.SIGTERM, runner.request_stop)
+        signal.signal(signal.SIGINT, runner.request_stop)
+        if not camera.open():
+            log.emit("warn", reason="camera unavailable at start; tamper monitoring continues")
+        try:
+            for frame in camera.frames():
+                now = runner.clock()
+                runner.on_frame(frame, now)
+                runner.step(now)
+                if runner._stop:
+                    break
+        finally:
+            camera.release()
+            if camera.status.gone and cfg.tamper.camera_gone_is_tamper:
+                now = runner.clock()
+                signal_ = runner.monitor.report_external(
+                    tamper_mod.CAMERA_GONE, detail="capture device disappeared", now=now
+                )
+                runner._tamper([signal_], now=now)
+            log.emit(
+                "stop",
+                frames=runner.stats.frames,
+                tamper=runner.stats.tamper_events,
+                sirens=runner.stats.sirens,
+                warnings=runner.stats.warnings,
+            )
     return 0
 
 

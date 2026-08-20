@@ -74,7 +74,7 @@ does the thing ranked first.
 
 ## S2 · Motion → frames and manifest on disk (7 h, deps: S0)
 
-- [ ] **S2.1** `camera.py` — MJPG 1280×720; the driver offers **only 30 fps for MJPG** (10 fps for
+- [x] **S2.1** `camera.py` — MJPG 1280×720; the driver offers **only 30 fps for MJPG** (10 fps for
       YUYV), so 5 fps is decimation in code; retry on USB drop. *Done when* a 60 s capture yields
       ~300 decoded frames and survives an unplug/replug.
 - [x] **S2.2** `detector.py` — MOG2 on blurred greyscale, `MIN_AREA_PCT`, `MIN_MOTION_FRAMES`,
@@ -87,9 +87,9 @@ does the thing ranked first.
 - [x] **S2.4** `spool.py` — priorities (first frame and manifest first, `tamper` ahead of all),
       `SPOOL_MAX_MB`, drop from the middle, never the first frame, every drop logged,
       `RETENTION_DAYS`. *Done when* forced overflow keeps first frames and logs each drop.
-- [ ] **S2.5** `camtrap calibrate` and `camtrap mask`. *Done when* calibrate prints a recommended
+- [x] **S2.5** `camtrap calibrate` and `camtrap mask`. *Done when* calibrate prints a recommended
       `MIN_AREA_PCT` from real noise and mask writes polygons into the config.
-- [ ] **S2.6** Wire `motion` → stage 1 warning (needs S1.9). *Done when* walking into the room plays
+- [x] **S2.6** Wire `motion` → stage 1 warning (needs S1.9). *Done when* walking into the room plays
       the warning in `WARN_LANGS` order within 3 s of confirmed motion, and the same walk-through
       never produces a siren.
 - [ ] **S2.7** 30-minute empty-room run.
@@ -138,7 +138,7 @@ new ssh keys, install, cron (spec §8). Deployment order: receiver → sender �
 - [x] **S5.1** `cv2.phaseCorrelate` on normalised greyscale, `MOVE_SHIFT_PX`; degenerate correlation
       with a fully changed frame → `tamper`. *Done when* synthetic shift → `tamper`, brightness step
       → `light`, smeared frame → `tamper`.
-- [ ] **S5.2** ALS arbiter on `in_illuminance_raw` of both sensors, including the case where it
+- [x] **S5.2** ALS arbiter on `in_illuminance_raw` of both sensors, including the case where it
       contradicts the correlation.
 - [ ] **S5.3** Live: lifting the laptop without touching the cable sounds the siren; switching the
       room light gives `light` and **no** siren.

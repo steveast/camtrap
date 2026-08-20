@@ -48,6 +48,10 @@ class DetectorConfig:
     global_change_pct: float = 70.0
     blur_kernel: int = 21
     analysis_width: int = 640
+    # Frames the background model must see before any verdict is issued. Independent of
+    # warmup_sec: with warm-up disabled the very first frame is 100 % foreground, which would
+    # otherwise be reported as a light change on every start.
+    min_model_frames: int = 5
     mog2_history: int = 500
     mog2_var_threshold: float = 16.0
     # Polygons excluded from analysis, in analysis-frame coordinates: [[[x, y], ...], ...]

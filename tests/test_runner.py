@@ -139,3 +139,83 @@ def test_gate_is_wired_from_arming_to_responder(wired):
     runner, _sysfs, _session, _cmds = wired
     allowed, reason = runner.responder._gate(Stage.SIREN, 0.0)
     assert not allowed and reason in ("exit_delay", "not_armed")
+
+
+# --- camera path (S2.6): motion gets the voice, a lifted case gets the siren -------------------
+
+
+@pytest.fixture
+def framed(wired):
+    """The wired runner plus a settled background, ready to receive frames."""
+    import numpy as np
+
+    runner, _sysfs, _session, cmds = wired
+    runner.cfg.detector.warmup_sec = 0.0
+    runner.cfg.detector.min_motion_frames = 2
+    runner.cfg.event.prebuffer_interval_sec = 0.2
+
+    def blank(value=40):
+        return np.full((360, 640, 3), value, dtype=np.uint8)
+
+    runner.step(0.0)  # arming sees the locked session at t=0, so the exit delay ends at t=60
+    for index in range(30):
+        runner.on_frame(blank(), now=index * 0.2)
+    runner.step(70.0)
+    runner.stats = type(runner.stats)()  # count only what the test itself provokes
+    runner.spawned.clear()
+    return runner, blank, cmds
+
+
+def test_motion_in_frame_plays_the_warning_only(framed):
+    runner, blank, cmds = framed
+    for index in range(6):
+        frame = blank()
+        frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+    assert runner.stats.warnings >= 1
+    assert runner.spawned.played("warn-vi.ogg")
+    assert not runner.spawned.played("siren.ogg")
+    assert not cmds.ran("lock-session")
+
+
+def test_motion_writes_frames_and_a_manifest(framed):
+    runner, blank, _cmds = framed
+    for index in range(6):
+        frame = blank()
+        frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
+        runner.on_frame(frame, now=70.0 + index * 0.2)
+    runner.on_frame(blank(), now=200.0)  # past the gap: closes the event
+    manifests = list(runner.cfg.spool_dir.glob("evt_*.json"))
+    frames = list(runner.cfg.spool_dir.glob("evt_*.jpg"))
+    assert manifests and frames
+    assert runner.stats.motion_events >= 1
+
+
+def test_a_lifted_case_sounds_the_siren_from_the_camera_path(framed):
+    import numpy as np
+
+    runner, _blank, cmds = framed
+    rng = np.random.default_rng(5)
+    texture = np.dstack([rng.integers(0, 255, size=(360, 640), dtype=np.uint8)] * 3)
+    for index in range(30):
+        runner.on_frame(texture, now=100.0 + index * 0.2)
+    runner.on_frame(np.roll(texture, 60, axis=1), now=110.0)
+    assert runner.spawned.played("siren.ogg")
+    assert "scene_shift" in runner.stats.signals
+    assert cmds.ran("lock-session")
+
+
+def test_a_light_switch_makes_no_sound_by_default(framed):
+    runner, blank, _cmds = framed
+    runner.on_frame(blank(215), now=100.0)
+    assert runner.stats.light_events == 1
+    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played("warn-vi.ogg")
+
+
+def test_light_can_be_configured_to_warn(framed):
+    runner, blank, _cmds = framed
+    runner.cfg.sound.warn_on_light = True
+    runner.on_frame(blank(215), now=100.0)
+    assert runner.spawned.played("warn-vi.ogg")
+    assert not runner.spawned.played("siren.ogg")

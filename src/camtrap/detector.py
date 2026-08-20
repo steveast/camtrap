@@ -61,6 +61,7 @@ class Detector:
         self._mask: np.ndarray | None = None
         self._prev_grey: np.ndarray | None = None
         self._global_active = False
+        self._seen = 0
 
     # --- helpers -------------------------------------------------------------
 
@@ -115,6 +116,11 @@ class Detector:
         changed_pct = 100.0 * changed / max(1, considered)
 
         prev_grey, self._prev_grey = self._prev_grey, grey
+        self._seen += 1
+
+        if self._seen <= self.cfg.detector.min_model_frames:
+            self._streak = 0
+            return Detection(EventKind.NONE, changed_pct=changed_pct, detail="model_priming")
 
         if self.warming_up(now=now):
             self._streak = 0

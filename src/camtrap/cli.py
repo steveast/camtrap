@@ -97,6 +97,73 @@ def cmd_input_scan(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Measure how much an empty room moves by itself, and suggest a threshold above it."""
+    from .camera import Camera
+    from .detector import Detector
+
+    camera = Camera(cfg)
+    if not camera.open():
+        print("cannot open camera", cfg.camera.device)
+        return 1
+    frames = []
+    wanted = max(10, int(args.sec * cfg.camera.target_fps))
+    try:
+        for frame in camera.frames(limit=wanted):
+            frames.append(frame)
+    finally:
+        camera.release()
+    if len(frames) < 10:
+        print(f"only {len(frames)} frames captured; need at least 10")
+        return 1
+    stats = Detector(cfg).calibrate(frames)
+    print(f"frames            {stats.frames}")
+    print(f"mean changed      {stats.mean:.3f} %")
+    print(f"p99 changed       {stats.p99:.3f} %")
+    print(f"recommended       min_area_pct = {stats.recommended_min_area_pct}")
+    print()
+    print("Run this in the room you will actually leave the laptop in, at the light level it")
+    print("will have at night: the noise floor of a dark frame is not the noise floor of a lit")
+    print("one, and the threshold has to clear the worse of the two.")
+    return 0
+
+
+def cmd_mask(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Capture one frame and write it out so the ignore polygons can be drawn against it."""
+    from .camera import Camera
+
+    camera = Camera(cfg)
+    if not camera.open():
+        print("cannot open camera", cfg.camera.device)
+        return 1
+    try:
+        frame = next(iter(camera.frames(limit=1)), None)
+    finally:
+        camera.release()
+    if frame is None:
+        print("no frame captured")
+        return 1
+    import cv2
+
+    out = cfg.root / "mask-reference.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), frame)
+    height, width = frame.shape[:2]
+    scale = cfg.detector.analysis_width / width
+    print(f"reference frame   {out}  ({width}x{height})")
+    print(f"analysis size     {cfg.detector.analysis_width}x{int(height * scale)}")
+    print()
+    print("Add polygons in ANALYSIS coordinates to ~/.config/camtrap/config.toml, e.g.:")
+    print()
+    print("  [detector]")
+    print("  ignore_mask = [[[320, 0], [640, 0], [640, 360], [320, 360]]]")
+    print()
+    print("Mask the window, the curtain, a mirror, the gap under the door, and any indicator")
+    print("light: every one of those moves on its own, and a warning nobody triggered is the")
+    print("fastest way to stop trusting the trap.")
+    return 0
+
+
 def cmd_pause(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     state.write_mode(cfg.root, state.MODE_PAUSED)
     return 0
@@ -133,6 +200,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     input_scan = sub.add_parser("input-scan", help="input devices reporting mute/volume keys")
     input_scan.set_defaults(func=cmd_input_scan)
+
+    calibrate = sub.add_parser("calibrate", help="noise statistics, recommends MIN_AREA_PCT")
+    calibrate.add_argument("--sec", type=float, default=30.0, help="seconds to sample")
+    calibrate.set_defaults(func=cmd_calibrate)
+
+    mask = sub.add_parser("mask", help="capture a reference frame for the ignore mask")
+    mask.set_defaults(func=cmd_mask)
 
     pause = sub.add_parser("pause", help="mark an expected offline period")
     pause.set_defaults(func=cmd_pause)
