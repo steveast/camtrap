@@ -36,6 +36,9 @@ class CameraConfig:
     capture_fps: int = 30
     target_fps: int = 5
     fourcc: str = "MJPG"
+    # Driver queue depth. 1 means "always give me the newest frame"; a deeper queue trades
+    # latency for smoothness, which is the wrong trade for a trap.
+    buffer_frames: int = 1
     reopen_delay_sec: float = 2.0
     max_reopen_attempts: int = 0  # 0 = retry forever
 
@@ -63,6 +66,9 @@ class DetectorConfig:
     # room, or a wall filling the lens. Phase correlation is meaningless there, so movement is
     # NOT inferred: refusing to guess costs a missed tamper, guessing costs a siren at 3am.
     min_texture_std: float = 3.0
+    #: Per-pixel temporal standard deviation below which a region counts as still, for
+    #: `suggest-mask`. Sensor noise on this camera sits near 2.
+    activity_std_floor: float = 6.0
     # Above this share of changed pixels the scene is checked for a global shift. Deliberately
     # lower than global_change_pct: lifting the laptop can change well under 70 % of the frame
     # while still moving the whole scene, and that is a tamper, not motion.
@@ -78,6 +84,12 @@ class EventConfig:
     event_gap_sec: float = 30.0
     max_frames_per_event: int = 60
     jpeg_quality: int = 85
+    # A snapshot every snapshot_interval_sec is right for a curtain twitching for a minute, and
+    # wrong for a person crossing the room in two seconds: they land between frames and the event
+    # ends up documenting the curtain. So a change well above the trigger threshold takes a frame
+    # immediately, subject to its own shorter floor.
+    boost_area_pct: float = 4.0
+    boost_min_interval_sec: float = 1.0
 
 
 @dataclass

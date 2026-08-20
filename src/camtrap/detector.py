@@ -39,6 +39,16 @@ class Detection:
 
 
 @dataclass
+class ActivityMap:
+    """Where an empty room moves by itself, and the boxes that would cover it."""
+
+    frames: int
+    hot_pct: float
+    boxes: list[list[list[int]]]
+    heat_path: str = ""
+
+
+@dataclass
 class NoiseStats:
     frames: int
     mean: float
@@ -205,6 +215,66 @@ class Detector:
         window = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
         (dx, dy), response = cv2.phaseCorrelate(a, b, window)
         return float((dx**2 + dy**2) ** 0.5), float(response)
+
+    def activity_map(self, frames: list[np.ndarray], *, min_box_pct: float = 0.3) -> ActivityMap:
+        """Accumulate where the picture is unstable, then propose ignore polygons.
+
+        Deliberately NOT the MOG2 foreground: the background model adapts to anything that moves
+        continuously, so a curtain swaying all afternoon slowly becomes "background" and the map
+        comes back empty — which is exactly the region worth masking. Per-pixel variance over time
+        does not adapt away, and it answers the actual question: where does this frame never
+        settle.
+
+        Variance is accumulated with Welford, so two minutes at 5 fps costs two frames of memory
+        rather than six hundred.
+        """
+        mean: np.ndarray | None = None
+        m2: np.ndarray | None = None
+        counted = 0
+        for frame in frames:
+            grey = self._prepare(frame).astype(np.float32)
+            if mean is None:
+                mean = np.zeros_like(grey)
+                m2 = np.zeros_like(grey)
+            counted += 1
+            delta = grey - mean
+            mean += delta / counted
+            m2 += delta * (grey - mean)
+
+        if mean is None or m2 is None or counted < 5:
+            return ActivityMap(frames=counted, hot_pct=0.0, boxes=[])
+
+        std = np.sqrt(m2 / max(1, counted - 1))
+        # Threshold against the *background* noise level, not a percentile of the whole frame: a
+        # curtain can occupy 12 % of the view, which puts the 99th percentile inside the curtain
+        # and finds nothing. Median plus a robust spread measures what a still wall looks like,
+        # and the absolute floor stops a perfectly still room from reporting sensor noise.
+        median = float(np.median(std))
+        mad = float(np.median(np.abs(std - median))) or 0.5
+        threshold = max(median + 6.0 * mad, self.cfg.detector.activity_std_floor)
+        hot = (std > threshold).astype(np.uint8) * 255
+        hot = cv2.morphologyEx(hot, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+        hot = cv2.morphologyEx(hot, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+
+        contours, _ = cv2.findContours(hot, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        area_floor = hot.size * min_box_pct / 100.0
+        boxes: list[list[list[int]]] = []
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+            if cv2.contourArea(contour) < area_floor:
+                continue
+            x, y, w, h = cv2.boundingRect(contour)
+            pad = 4
+            x0, y0 = max(0, x - pad), max(0, y - pad)
+            x1, y1 = min(hot.shape[1], x + w + pad), min(hot.shape[0], y + h + pad)
+            boxes.append([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+            if len(boxes) >= 6:
+                break
+
+        return ActivityMap(
+            frames=counted,
+            hot_pct=100.0 * float(np.count_nonzero(hot)) / hot.size,
+            boxes=boxes,
+        )
 
     # --- calibration ---------------------------------------------------------
 

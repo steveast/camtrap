@@ -171,3 +171,38 @@ def test_a_brightened_textured_scene_is_light(detector):
     result = detector.submit(brighter, now=10.0)
     assert result.kind is EventKind.LIGHT
     assert result.shift_px < detector.cfg.detector.move_shift_px
+
+
+def test_activity_map_finds_a_region_that_moves_by_itself(cfg):
+    """The curtain case: a fixed strip that never settles must come back as a box to mask.
+
+    Not built on the MOG2 foreground on purpose — a background model adapts to a curtain swaying
+    all afternoon and then reports nothing, which is exactly the region worth masking.
+    """
+    cfg.detector.warmup_sec = 0.0
+    detector = Detector(cfg)
+    frames = []
+    for index in range(60):
+        frame = _frame(60)
+        # A curtain moves as a body: one strip whose brightness swings. Random noise would be
+        # flattened by the blur and is not what a curtain looks like.
+        frame[40:300, 90:200] = 90 if index % 2 else 210
+        frames.append(frame)
+
+    activity = detector.activity_map(frames)
+    assert activity.frames > 40
+    assert activity.boxes, "a region moving in every frame must be proposed"
+    (x0, y0), (x1, _), _, _ = activity.boxes[0]
+    assert 75 <= x0 <= 95, activity.boxes[0]
+    assert 195 <= x1 <= 215, activity.boxes[0]
+    assert y0 <= 40
+    assert activity.hot_pct > 5.0
+
+
+def test_activity_map_proposes_nothing_for_a_still_room(cfg):
+    cfg.detector.warmup_sec = 0.0
+    detector = Detector(cfg)
+    rng = np.random.default_rng(9)
+    frames = [_noisy(rng) for _ in range(60)]
+    activity = detector.activity_map(frames)
+    assert activity.boxes == []

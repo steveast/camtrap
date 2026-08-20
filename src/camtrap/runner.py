@@ -126,8 +126,12 @@ class Runner:
 
         if detection.kind is EventKind.MOTION:
             self.stats.motion_events += 1
-            event = self.events.begin(EventKind.MOTION, now=now, frame=frame)
+            event = self.events.begin(
+                EventKind.MOTION, now=now, frame=frame, changed_pct=detection.changed_pct
+            )
             self.events.note_motion(now=now)
+            # Motion inside an open event still deserves a frame when it is big enough.
+            self.events.feed(frame, now=now, changed_pct=detection.changed_pct)
             # One warning per event. Asking per frame would re-enter the responder five times a
             # second and bury the journal in sound_skip lines.
             if self._warned_event != event.event_id:
@@ -135,7 +139,9 @@ class Runner:
                 self.motion(now)
         elif detection.kind is EventKind.LIGHT:
             self.stats.light_events += 1
-            self.events.begin(EventKind.LIGHT, now=now, frame=frame)
+            self.events.begin(
+                EventKind.LIGHT, now=now, frame=frame, changed_pct=detection.changed_pct
+            )
             if self.cfg.sound.warn_on_light:
                 self.motion(now)
         elif detection.kind is EventKind.TAMPER:
@@ -144,7 +150,7 @@ class Runner:
             )
             self._tamper([signal], now=now, frame=frame)
         else:
-            self.events.feed(frame, now=now)
+            self.events.feed(frame, now=now, changed_pct=detection.changed_pct)
 
         closed = self.events.maybe_close(now=now)
         if closed is not None:

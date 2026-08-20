@@ -175,3 +175,47 @@ def test_sound_is_recorded_in_the_manifest_without_waiting_for_close(writer, cfg
     manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
     assert manifest["sound_stage"] == "siren"
     assert manifest["sound_played"] is True
+
+
+def test_a_big_change_jumps_the_throttle(cfg):
+    """A curtain-triggered event must not swallow the person crossing the room.
+
+    With a plain 5 s throttle, someone visible for two seconds lands between snapshots: the event
+    exists and documents the curtain.
+    """
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    cfg.event.boost_area_pct = 4.0
+    cfg.event.boost_min_interval_sec = 1.0
+    writer = EventWriter(cfg)
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    baseline = event.frames_written
+
+    # small change 1 s in: throttled away
+    assert writer.feed(_frame(), now=1.0, changed_pct=1.0) is False
+    # big change 1.5 s in: taken immediately
+    assert writer.feed(_frame(), now=1.5, changed_pct=9.0) is True
+    assert event.frames_written == baseline + 1
+    assert event.boosted_frames == 1
+
+
+def test_the_boost_has_its_own_floor(cfg):
+    """Otherwise a person in frame would produce five frames a second."""
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    writer.observe(_frame(), now=0.0)
+    writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    assert writer.feed(_frame(), now=1.2, changed_pct=20.0) is True
+    assert writer.feed(_frame(), now=1.4, changed_pct=20.0) is False  # inside the 1 s floor
+    assert writer.feed(_frame(), now=2.5, changed_pct=20.0) is True
+
+
+def test_boosted_frames_are_recorded_in_the_manifest(cfg):
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    writer.observe(_frame(), now=0.0)
+    event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
+    writer.feed(_frame(), now=2.0, changed_pct=15.0)
+    writer.close(now=60.0)
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["boosted_frames"] == 1

@@ -107,6 +107,7 @@ case "${1:-arm}" in
              exec "$REPO/tools/make-warning.sh" --all ;;
     calibrate) shift || true; run calibrate "$@" ;;
     mask)    shift || true; run mask "$@" ;;
+    suggest-mask) shift || true; run suggest-mask "$@" ;;
     logs)
         # The unit logs to the journal; a hand-started run logs to the file. Show whichever exists.
         if [ -f "$LOG" ]; then
@@ -132,6 +133,7 @@ guard — laptop camera trap
   guard sounds       regenerate siren.ogg and warn-*.ogg
   guard calibrate    measure this room's noise floor, recommend a threshold
   guard mask         capture a reference frame for the ignore mask
+  guard suggest-mask watch 2 min and print polygons for whatever moves on its own
   guard logs [N]     the last N log lines (file for hand-started runs, journal for the unit)
   guard report       summarise a run: events, sirens, warnings, drops, what it refused and why
   guard tg-test      send the newest captured frame to Telegram (checks the whole photo path)

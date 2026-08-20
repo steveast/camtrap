@@ -60,6 +60,9 @@ class Camera:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera.height)
         cap.set(cv2.CAP_PROP_FPS, self.cfg.camera.capture_fps)
+        # Keep the driver queue short. With a deep queue the frame we finally decode is seconds
+        # old: motion is reported late and the snapshot shows where the person *was*.
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, self.cfg.camera.buffer_frames)
         return cap
 
     def open(self) -> bool:
@@ -89,6 +92,7 @@ class Camera:
     # --- frames --------------------------------------------------------------
 
     def read(self) -> np.ndarray | None:
+        """Decode one frame. Prefer read_decimated() in a loop: it skips decoding entirely."""
         if self._cap is None and not self.open():
             return None
         assert self._cap is not None
@@ -99,12 +103,31 @@ class Camera:
         self.status.last_frame_at = self.clock()
         return frame
 
+    def _skip(self, count: int) -> bool:
+        """Pull frames off the driver without decoding them (grab, not retrieve).
+
+        This is the difference between decoding 30 MJPEG frames a second and decoding 5. The
+        skipped frames still have to leave the queue, or the queue backs up and every frame we do
+        decode is stale.
+        """
+        assert self._cap is not None
+        for _ in range(count):
+            if not self._cap.grab():
+                return False
+            self.status.frames += 1
+        return True
+
     def frames(self, *, limit: int | None = None) -> Iterator[np.ndarray]:
         """Yield decimated frames, reopening the device if it drops off the bus."""
         produced = 0
         failures = 0
         while limit is None or produced < limit:
-            frame = self.read()
+            if (self._cap is None and not self.open()) or (
+                self._stride > 1 and not self._skip(self._stride - 1)
+            ):
+                frame = None
+            else:
+                frame = self.read()
             if frame is None:
                 failures += 1
                 self.release()
@@ -117,8 +140,5 @@ class Camera:
                 self.sleep(self.cfg.camera.reopen_delay_sec)
                 continue
             failures = 0
-            self._counter += 1
-            if self._counter % self._stride:
-                continue
             produced += 1
             yield frame

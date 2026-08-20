@@ -36,6 +36,7 @@ class Event:
     sound_stage: str = ""
     sound_latency_ms: int | None = None
     sound_evidence_confirmed: bool = False
+    boosted_frames: int = 0
 
     @property
     def single_frame(self) -> bool:
@@ -71,6 +72,7 @@ class EventWriter:
         now: float,
         frame: np.ndarray | None = None,
         signals: list[str] | None = None,
+        changed_pct: float | None = None,
     ) -> Event:
         if self.active is not None:
             # An event already runs: escalate its type if this is a stronger signal.
@@ -123,6 +125,7 @@ class EventWriter:
             type=kind.value,
             signals=",".join(event.signals) or "-",
             prebuffer=len(prebuffer),
+            changed_pct=round(changed_pct, 2) if changed_pct is not None else "-",
         )
         return event
 
@@ -130,12 +133,22 @@ class EventWriter:
         if self.active is not None:
             self.active.last_motion = now
 
-    def feed(self, frame: np.ndarray, *, now: float) -> bool:
-        """Add a frame to the active event if the throttle and the cap allow it."""
+    def feed(self, frame: np.ndarray, *, now: float, changed_pct: float = 0.0) -> bool:
+        """Add a frame to the active event if the throttle and the cap allow it.
+
+        `changed_pct` lets a big change jump the throttle. Without that, an event opened by a
+        twitching curtain snapshots the curtain every 5 s and a person crossing the room in two
+        seconds lands between frames — the event exists, the person is not in it.
+        """
         event = self.active
         if event is None or event.single_frame:
             return False
-        if now - event.last_frame_at < self.cfg.event.snapshot_interval_sec:
+        since = now - event.last_frame_at
+        boosted = (
+            changed_pct >= self.cfg.event.boost_area_pct
+            and since >= self.cfg.event.boost_min_interval_sec
+        )
+        if since < self.cfg.event.snapshot_interval_sec and not boosted:
             return False
         if event.frames_written >= self.cfg.event.max_frames_per_event:
             if not event.truncated:
@@ -143,6 +156,8 @@ class EventWriter:
                 log.emit("event_truncated", id=event.event_id, cap=event.frames_written)
             return False
         self._write_frame(event, frame, now=now, throttled=True)
+        if boosted:
+            event.boosted_frames += 1
         # Keep the on-disk count roughly current without rewriting JSON for every frame.
         if event.frames_written % 4 == 0:
             self._write_manifest(event)
@@ -178,6 +193,7 @@ class EventWriter:
             id=event.event_id,
             type=event.kind.value,
             frames=event.frames_written,
+            boosted=event.boosted_frames,
             truncated=event.truncated,
             sound=event.sound_stage or "-",
         )
@@ -210,6 +226,7 @@ class EventWriter:
             "started": event.started_wall,
             "ended": event.started_wall + max(0.0, (event.ended or event.started) - event.started),
             "frames": event.frames_written,
+            "boosted_frames": event.boosted_frames,
             "truncated": event.truncated,
             "agent_version": __version__,
             "sound_played": event.sound_played,

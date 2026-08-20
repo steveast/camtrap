@@ -219,6 +219,51 @@ def cmd_calibrate(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_suggest_mask(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    """Watch the room, then propose ignore polygons for whatever moves on its own."""
+    import cv2
+
+    from .camera import Camera
+    from .detector import Detector
+
+    camera = Camera(cfg)
+    if not camera.open():
+        print(f"cannot open camera {cfg.camera.device}")
+        return 1
+    wanted = max(30, int(args.sec * cfg.camera.target_fps))
+    print(f"watching for {args.sec:.0f}s — leave the room as it will be, do not walk in front")
+    frames = []
+    try:
+        for frame in camera.frames(limit=wanted):
+            frames.append(frame)
+    finally:
+        camera.release()
+
+    detector = Detector(cfg)
+    activity = detector.activity_map(frames)
+    print()
+    print(f"frames analysed   {activity.frames}")
+    print(f"moving area       {activity.hot_pct:.2f} % of the frame")
+    if not activity.boxes:
+        print()
+        print("nothing moved consistently — no mask needed for this scene")
+        return 0
+
+    reference = cfg.root / "mask-reference.jpg"
+    reference.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(reference), frames[-1])
+    print(f"reference frame   {reference}")
+    print()
+    print("Add to ~/.config/camtrap/config.toml (coordinates are analysis-frame, not full size):")
+    print()
+    print("  [detector]")
+    print(f"  ignore_mask = {activity.boxes}")
+    print()
+    print("Look at the reference frame first: mask a curtain or a mirror, not the doorway.")
+    print("Anything inside these polygons stops being seen at all.")
+    return 0
+
+
 def cmd_mask(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Capture one frame and write it out so the ignore polygons can be drawn against it."""
     from .camera import Camera
@@ -374,6 +419,12 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate = sub.add_parser("calibrate", help="noise statistics, recommends MIN_AREA_PCT")
     calibrate.add_argument("--sec", type=float, default=30.0, help="seconds to sample")
     calibrate.set_defaults(func=cmd_calibrate)
+
+    suggest = sub.add_parser(
+        "suggest-mask", help="watch the room and propose ignore polygons for what moves by itself"
+    )
+    suggest.add_argument("--sec", type=float, default=120.0, help="seconds to observe")
+    suggest.set_defaults(func=cmd_suggest_mask)
 
     mask = sub.add_parser("mask", help="capture a reference frame for the ignore mask")
     mask.set_defaults(func=cmd_mask)
