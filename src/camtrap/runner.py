@@ -24,6 +24,7 @@ from .detector import Detector, EventKind
 from .event import EventWriter
 from .heartbeat import HeartbeatSender
 from .heartbeat import build as build_heartbeat
+from .heartbeat import publish as publish_heartbeat
 from .inhibit import Inhibitor
 from .player import SoundResponder, Stage
 from .spool import Spool
@@ -277,6 +278,7 @@ def run_forever(cfg: Config) -> int:
         finally:
             runner.finish()
             camera.release()
+            publish_heartbeat(cfg)
             if camera.status.gone and cfg.tamper.camera_gone_is_tamper:
                 now = runner.clock()
                 signal_ = runner.monitor.report_external(
@@ -398,6 +400,9 @@ def watch(cfg: Config, *, minutes: float = 30.0, still: float = 10.0) -> int:
     finally:
         if previous_paused:
             write_mode(cfg.root, MODE_PAUSED)
+        # Tell the receiver how this ended. Without it the poller keeps the last heartbeat —
+        # `armed`, from mid-run — sees the agent go quiet, and reports the laptop as taken.
+        publish_heartbeat(cfg)
 
 
 def _watch_body(cfg: Config, *, minutes: float, still: float) -> int:
@@ -538,6 +543,7 @@ def drill(
         finally:
             runner.finish()
             camera.release()
+            publish_heartbeat(cfg)
             log.emit(
                 "stop",
                 mode="drill",

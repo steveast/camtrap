@@ -76,6 +76,23 @@ def build(
     return Heartbeat({key: value for key, value in fields.items()})
 
 
+def publish(cfg: Config) -> bool:
+    """Send one heartbeat immediately, so the receiver learns the current mode.
+
+    Needed whenever the agent changes mode and then stops: the poller reads the last heartbeat it
+    was given, and a stale `armed` plus a dead agent reads as "the laptop was taken". Every run
+    that ends deliberately owes the receiver a final word.
+    """
+    from .spool import Spool
+    from .uploader import Uploader
+
+    uploader = Uploader(cfg, Spool(cfg))
+    line = build(cfg, started=0.0, now=0.0).render()
+    ok = uploader.heartbeat(line)
+    log.emit("mode_published", ok=ok, mode=read_mode(cfg.root).name)
+    return ok
+
+
 class HeartbeatSender:
     """Sends on an interval; a failure waits out the interval rather than retrying in a loop."""
 
