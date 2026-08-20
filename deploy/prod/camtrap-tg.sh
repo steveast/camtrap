@@ -16,6 +16,7 @@
 #   manifest <name>            print one manifest
 #   send-photo <name>          stdin: <token>\n<chat_id>\n<caption...>
 #   send-album <n1,n2,...>     stdin: <token>\n<chat_id>\n<caption...>  (up to 10, one group)
+#   send-doc <name>            stdin: <token>\n<chat_id>\n<caption...>  (uncompressed original)
 #   send-message               stdin: <token>\n<chat_id>\n<text...>
 #   delete <name>              remove one delivered artefact
 set -eu
@@ -89,6 +90,26 @@ case "$verb" in
         log "tick verb=send-photo name=$name code=$code"
         [ "$code" = "200" ] || die tg_http "$code"
         echo "ok send-photo $name"
+        ;;
+
+    send-doc)
+        # sendDocument, not sendPhoto: Telegram re-encodes anything sent as a photo, and a face
+        # that survived JPEG 95 at 1080p should not then be resized by a chat client. This is the
+        # copy an investigator would be shown.
+        [ "$argc" -eq 2 ] || die bad_arity "$argc"
+        valid_name "$name" || die bad_name "$name"
+        [ -f "$INBOX/$name" ] || die missing "$name"
+        IFS= read -r token || die no_token
+        IFS= read -r chat || die no_chat
+        caption=$(cat)
+        code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$CURL_MAX_TIME" \
+            -F "chat_id=$chat" \
+            -F "caption=$caption" \
+            -F "document=@$INBOX/$name" \
+            "$API/bot$token/sendDocument" || echo 000)
+        log "tick verb=send-doc name=$name code=$code"
+        [ "$code" = "200" ] || die tg_http "$code"
+        echo "ok send-doc $name"
         ;;
 
     send-album)

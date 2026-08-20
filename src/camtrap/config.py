@@ -29,8 +29,11 @@ def config_path() -> Path:
 @dataclass
 class CameraConfig:
     device: str = "/dev/video0"
-    width: int = 1280
-    height: int = 720
+    # Measured on this camera: 1920x1080 costs nothing in frame rate (8.3 fps either way — the
+    # limit is exposure in room light, not resolution), and a face is the whole point of the
+    # evidence. 293 KB per frame at quality 95 against 88 KB at 720p/85.
+    width: int = 1920
+    height: int = 1080
     # The driver only offers 30 fps for MJPG at 1280x720 (10 for YUYV), so the 5 fps the spec
     # asks for is decimation in code: keep every capture_fps // target_fps-th frame.
     capture_fps: int = 30
@@ -88,7 +91,9 @@ class EventConfig:
     prebuffer_interval_sec: float = 1.0
     event_gap_sec: float = 30.0
     max_frames_per_event: int = 60
-    jpeg_quality: int = 85
+    # 95, not 85: this frame may end up in front of a police officer looking at a face. The extra
+    # 120 KB is worth more than the disk it costs.
+    jpeg_quality: int = 95
     # A snapshot every snapshot_interval_sec is right for a curtain twitching for a minute, and
     # wrong for a person crossing the room in two seconds: they land between frames and the event
     # ends up documenting the curtain. So a change well above the trigger threshold takes a frame
@@ -99,7 +104,8 @@ class EventConfig:
 
 @dataclass
 class SpoolConfig:
-    max_mb: int = 512
+    # Frames are ~293 KB at 1080p/q95, so a 60-frame event is ~17 MB. 1 GB holds a trip's worth.
+    max_mb: int = 1024
     retention_days: int = 14
     upload_retry_max_sec: float = 300.0
     upload_retry_base_sec: float = 2.0

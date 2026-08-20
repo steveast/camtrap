@@ -27,6 +27,9 @@ MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
 # pre-buffer frame — an empty room seconds before anything happened — so the manifest's key_frame
 # leads, and the rest follow as an album. 1 disables the album.
 ALBUM_MAX="${ALBUM_MAX:-6}"
+# Telegram re-encodes photos. The key frame is therefore ALSO sent as a document, which keeps the
+# original 1080p/q95 pixels — the copy that would be shown to police. 0 disables it.
+SEND_ORIGINAL="${SEND_ORIGINAL:-1}"
 SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
@@ -48,6 +51,10 @@ send_photo() {
 
 send_album() {
     printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$2" | remote "send-album $1"
+}
+
+send_doc() {
+    printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$2" | remote "send-doc $1"
 }
 
 local_time() {
@@ -212,8 +219,15 @@ sound: $sound}$cut_short"
         done
     fi
 
+    # The uncompressed original of the key frame, for the copy that matters.
+    send_original() {
+        [ "$SEND_ORIGINAL" = "1" ] || return 0
+        send_doc "$first" "🔍 original, uncompressed — $first" || log "original_failed name=$first"
+    }
+
     if [ "$ALBUM_MAX" -gt 1 ] && [ "$album" != "$first" ]; then
         if send_album "$album" "$caption"; then
+            send_original
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
             [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
             [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
@@ -225,6 +239,7 @@ sound: $sound}$cut_short"
 
     if printf '%s\n' "$listing" | grep -q "^$first "; then
         if send_photo "$first" "$caption"; then
+            send_original
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
             [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
             [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"

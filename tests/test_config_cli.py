@@ -9,12 +9,17 @@ from camtrap import config as config_mod
 
 
 def test_defaults_match_spec(cfg):
-    assert cfg.camera.width == 1280
+    # 1080p at quality 95: measured to cost nothing in frame rate on this camera, and the frame
+    # may end up in front of an investigator looking at a face.
+    assert cfg.camera.width == 1920
+    assert cfg.camera.height == 1080
+    assert cfg.event.jpeg_quality == 95
     assert cfg.camera.target_fps == 5
     assert cfg.detector.warmup_sec == 20.0
+    assert cfg.detector.min_area_pct == 3.0  # above every curtain event measured in the room
     assert cfg.event.snapshot_interval_sec == 5.0
     assert cfg.event.max_frames_per_event == 60
-    assert cfg.spool.max_mb == 512
+    assert cfg.spool.max_mb == 1024
     assert cfg.spool.retention_days == 14
     assert cfg.sound.siren_sec == 6.0
     assert cfg.sound.volume_pct == 100
