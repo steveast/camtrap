@@ -55,6 +55,12 @@ def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     return run_forever(cfg)
 
 
+def cmd_drill(cfg: config_mod.Config, args: argparse.Namespace) -> int:
+    from .runner import drill
+
+    return drill(cfg, volume_pct=args.volume, siren_sec=args.siren_sec, seconds=args.seconds)
+
+
 def cmd_preflight(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Everything that must hold before walking out of the room."""
     from .runner import preflight
@@ -273,6 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="main mode (used by the systemd unit)")
     run.set_defaults(func=cmd_run)
+
+    drill_cmd = sub.add_parser("drill", help="rehearse the physical checks: cable, mute, lid")
+    drill_cmd.add_argument("--volume", type=int, default=40, help="siren volume for the drill")
+    drill_cmd.add_argument("--siren-sec", type=float, default=2.0, help="burst length")
+    drill_cmd.add_argument("--seconds", type=float, default=180.0, help="how long to stay armed")
+    drill_cmd.set_defaults(func=cmd_drill)
 
     preflight_cmd = sub.add_parser("preflight", help="is this trap fit to be left alone?")
     preflight_cmd.add_argument("--no-probe", action="store_true", help="skip the audio probe")

@@ -57,15 +57,18 @@ from phase 1 scope, arming is `on_lock` plus a manual `camtrap arm`.
 - [x] **S1.10** `warn-test` + `sound_ok` covering every language — a missing `warn-<lang>.ogg` for a
       configured language fails at startup and sets `sound_ok = false`, instead of going quiet at
       event time. *Done when* deleting `warn-th.ogg` with `th` in `WARN_LANGS` turns the check red.
-- [ ] **S1.11** Intelligibility — get a native speaker to listen to `warn-vi.ogg` and `warn-th.ogg`,
+- [ ] **S1.11** Intelligibility — *heard*, not yet *understood*: the owner confirmed the Vietnamese
+      file is audible and clear as audio, which is not the same as a Vietnamese speaker parsing the
+      tones. — get a native speaker to listen to `warn-vi.ogg` and `warn-th.ogg`,
       or replace them with better recordings. **Start this first, it has the longest lead time and
       code cannot fix it.** *Done when* each configured language is either confirmed by a speaker or
       replaced.
 - [x] **S1.7** `camtrap input-scan` — list input devices reporting mute/volume keys; optional
       `EVIOCGRAB` on **external devices only**, released on fd close. *Done when* the grab survives a
       `kill -9` without leaving input captured.
-- [ ] **S1.8** Physical pass (checks 1–6 in plan.md S1). Iterate at low volume with `SIREN_SEC = 2`,
-      final pass at real values.
+- [~] **S1.8** Physical pass (checks 1–6 in plan.md S1). **Check 1 done 2026-08-20**: siren and the
+      Vietnamese warning both audible from the built-in speakers (`guard test 30`). Remaining:
+      mute mid-siren, volume down, lid close, power press, replug — all covered by `guard drill`.
 
 **→ CHECKPOINT 1.** Nothing proceeds until the physical checks pass. After this the trap already
 does the thing ranked first.

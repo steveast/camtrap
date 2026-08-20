@@ -1,5 +1,7 @@
 """S4.1: the heartbeat carries readiness, not just liveness (spec 3.6)."""
 
+from typing import ClassVar
+
 import pytest
 
 from camtrap.arming import Arming
@@ -88,8 +90,14 @@ def test_spool_depth_is_reported(cfg, parts):
     assert fields["spool"] == "1"
 
 
+class _Sink:
+    name = "prod"
+
+
 def test_sender_respects_the_interval(cfg):
     class FakeUploader:
+        sinks: ClassVar[list] = [_Sink()]
+
         def __init__(self):
             self.lines = []
             self.ok = True
@@ -107,14 +115,62 @@ def test_sender_respects_the_interval(cfg):
     assert len(uploader.lines) == 2
 
 
-def test_a_failed_send_is_retried_next_tick(cfg, capsys):
+def test_a_failed_send_is_retried_on_the_next_due_tick_not_in_a_loop(cfg, capsys):
     class FailingUploader:
+        sinks: ClassVar[list] = [_Sink()]
+        attempts = 0
+
         def heartbeat(self, line):
+            type(self).attempts += 1
             return False
 
-    sender = HeartbeatSender(cfg, FailingUploader())
+    uploader = FailingUploader()
+    sender = HeartbeatSender(cfg, uploader)
     heartbeat = build(cfg, started=0.0, now=0.0)
     assert not sender.maybe_send(heartbeat, now=0.0)
     assert "heartbeat_failed" in capsys.readouterr().out
-    # _last was not advanced, so the next tick tries again immediately
-    assert sender.due(now=1.0)
+
+    # The run loop calls this every 250 ms; it must not retry — or log — on every one of them.
+    for tick in range(1, 40):
+        sender.maybe_send(heartbeat, now=tick * 0.25)
+    assert FailingUploader.attempts == 1
+    assert "heartbeat_failed" not in capsys.readouterr().out
+
+    assert sender.due(now=61.0)
+    sender.maybe_send(heartbeat, now=61.0)
+    assert FailingUploader.attempts == 2
+
+
+def test_recovery_is_logged_once(cfg, capsys):
+    class FlakyUploader:
+        sinks: ClassVar[list] = [_Sink()]
+
+        def __init__(self):
+            self.ok = False
+
+        def heartbeat(self, line):
+            return self.ok
+
+    uploader = FlakyUploader()
+    sender = HeartbeatSender(cfg, uploader)
+    heartbeat = build(cfg, started=0.0, now=0.0)
+    sender.maybe_send(heartbeat, now=0.0)
+    capsys.readouterr()
+    uploader.ok = True
+    sender.maybe_send(heartbeat, now=61.0)
+    assert "heartbeat_recovered" in capsys.readouterr().out
+
+
+def test_no_receiver_configured_is_reported_once_not_every_tick(cfg, capsys):
+    class NoSinks:
+        sinks: ClassVar[list] = []
+
+        def heartbeat(self, line):
+            raise AssertionError("must not try to send with no receiver")
+
+    sender = HeartbeatSender(cfg, NoSinks())
+    heartbeat = build(cfg, started=0.0, now=0.0)
+    for tick in range(400):
+        sender.maybe_send(heartbeat, now=tick * 0.25)
+    out = capsys.readouterr().out
+    assert out.count("heartbeat_skip") == 1

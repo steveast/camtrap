@@ -77,23 +77,46 @@ def build(
 
 
 class HeartbeatSender:
-    """Sends on an interval; a failure is logged and retried on the next due tick."""
+    """Sends on an interval; a failure waits out the interval rather than retrying in a loop."""
 
     def __init__(self, cfg: Config, uploader) -> None:
         self.cfg = cfg
         self.uploader = uploader
         self._last = float("-inf")
+        self._failing = False
+        self._warned_unconfigured = False
 
     def due(self, *, now: float) -> bool:
         return now - self._last >= self.cfg.upload.heartbeat_sec
 
+    @property
+    def configured(self) -> bool:
+        """False when there is no receiver at all — nothing to send to, nothing to complain about
+        every tick. Frames still queue locally and the siren never needed the network."""
+        return any(
+            getattr(sink, "name", "") == "prod" for sink in getattr(self.uploader, "sinks", [])
+        )
+
     def maybe_send(self, heartbeat: Heartbeat, *, now: float) -> bool:
         if not self.due(now=now):
             return False
+        if not self.configured:
+            if not self._warned_unconfigured:
+                self._warned_unconfigured = True
+                log.emit("heartbeat_skip", reason="no receiver configured")
+            self._last = now
+            return False
+
         line = heartbeat.render()
         ok = self.uploader.heartbeat(line)
+        # Either way the timer advances: the next attempt is the next due tick, not the next loop
+        # iteration 250 ms later.
+        self._last = now
         if ok:
-            self._last = now
-        else:
+            if self._failing:
+                self._failing = False
+                log.emit("heartbeat_recovered")
+        elif not self._failing:
+            self._failing = True
             log.emit("heartbeat_failed", reason="no sink acknowledged")
         return ok

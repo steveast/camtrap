@@ -37,6 +37,7 @@ case "${1:-arm}" in
         ;;
     status)  shift || true; run status "$@" ;;
     check)   shift || true; run preflight "$@" ;;
+    drill)   shift || true; run drill "$@" ;;
     test)
         # `guard test 30` rehearses at 30 % — the first run in a flat need not be full volume.
         shift || true
@@ -61,6 +62,7 @@ guard — laptop camera trap
   guard off          stop and mark the offline as expected
   guard status       mode, arming state, spool, sound readiness
   guard check        preflight only: camera, sounds, speakers, receiver, no-sleep
+  guard drill        rehearse cable/mute/lid at low volume, screen stays unlocked
   guard test         play the siren and the warning at full volume
   guard test 30      rehearse the same at 30 %
   guard sounds       regenerate siren.ogg and warn-*.ogg

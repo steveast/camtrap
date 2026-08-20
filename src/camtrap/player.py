@@ -173,13 +173,44 @@ class AudioPath:
             log.emit("sound_error", reason="no sink found")
         return sink
 
-    def reassert(self, *, volume_pct: int) -> None:
-        """Undo whatever a keypress just did: unmute, restore volume, keep speakers routed."""
+    def reassert(self, *, volume_pct: int) -> list[str]:
+        """Undo whatever a keypress just did: unmute, restore volume, keep speakers routed.
+
+        Returns the list of things that actually had to be undone, so a drill can show that the
+        defence works rather than asserting that it should.
+        """
         if not self._sink:
-            return
+            return []
+        undone: list[str] = []
+        if self._is_muted():
+            undone.append("mute")
+        low = self._volume_below(volume_pct)
+        if low is not None:
+            undone.append(f"volume:{low}")
         self._pactl("set-sink-mute", self._sink, "0")
         self._pactl("set-sink-volume", self._sink, f"{volume_pct}%")
         self._disable_auto_mute()
+        if undone:
+            log.emit("sound_hold", undone=",".join(undone), sink=self._sink)
+        return undone
+
+    def _is_muted(self) -> bool:
+        result = self._pactl("get-sink-mute", self._sink or "")
+        text = (getattr(result, "stdout", "") or "").strip().lower()
+        return text.endswith("yes")
+
+    def _volume_below(self, wanted_pct: int) -> int | None:
+        """Current volume if someone turned it down below the level we asked for."""
+        result = self._pactl("get-sink-volume", self._sink or "")
+        text = getattr(result, "stdout", "") or ""
+        for token in text.replace("/", " ").split():
+            if token.endswith("%"):
+                try:
+                    current = int(token[:-1])
+                except ValueError:
+                    continue
+                return current if current < wanted_pct - 2 else None
+        return None
 
     def _disable_auto_mute(self) -> None:
         # ALSA control: with Auto-Mute enabled, a plugged jack silences the speakers.

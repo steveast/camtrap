@@ -347,6 +347,80 @@ def preflight(
     return ready, rows
 
 
+def drill(
+    cfg: Config, *, volume_pct: int = 40, siren_sec: float = 2.0, seconds: float = 180.0
+) -> int:
+    """A rehearsal for checkpoint 1: armed immediately, short quiet siren, no session lock.
+
+    The six physical checks in the plan are otherwise six separate experiments with a locked
+    screen between them. Here they are one run: pull the cable, press mute, close the lid, and
+    watch what the agent reports.
+    """
+    from .arming import Arming
+
+    cfg.sound.volume_pct = volume_pct
+    cfg.sound.warn_volume_pct = volume_pct
+    cfg.sound.siren_sec = siren_sec
+    # A drill must not lock the screen on every trigger: the point is to keep testing.
+    cfg.sound.lock_session_on_tamper = False
+    cfg.sound.cooldown_sec = min(cfg.sound.cooldown_sec, 8.0)
+    cfg.sound.max_per_event = 99
+    cfg.arming.mode = "always"
+    cfg.arming.exit_delay_sec = 0.0
+    cfg.arming.grace_after_unlock_sec = 0.0
+    cfg.detector.warmup_sec = min(cfg.detector.warmup_sec, 3.0)
+
+    missing = sounds.missing_sounds(cfg)
+    if missing:
+        print(f"missing sounds: {', '.join(missing)} — run `guard sounds` first")
+        return 1
+
+    pct = f"{volume_pct}%"
+    print(f"DRILL — armed immediately, siren {siren_sec:.0f}s at {pct}, screen will NOT lock.")
+    print()
+    print("  1. pull the power cable      -> siren within ~2 s")
+    print("  2. press mute mid-siren      -> sound returns within 250 ms, logged as sound_hold")
+    print("  3. turn the volume down      -> restored, also logged")
+    print("  4. close the lid             -> siren, and the machine stays awake")
+    print("  5. press the power button    -> machine stays up")
+    print("  6. plug the cable back in    -> nothing (replugging is not a signal)")
+    print()
+    print(f"Runs for {seconds:.0f}s, Ctrl+C to stop early.")
+    print()
+
+    with Inhibitor() as inhibitor:
+        camera = Camera(cfg)
+        runner = Runner(cfg, inhibitor=inhibitor, camera=camera, arming=Arming(cfg))
+        runner.started = runner.clock()
+        runner.arming.start(now=runner.started)
+        deadline = runner.started + seconds
+        signal.signal(signal.SIGINT, runner.request_stop)
+        signal.signal(signal.SIGTERM, runner.request_stop)
+        camera_ok = camera.open()
+        if not camera_ok:
+            print("camera unavailable — the cable and lid checks still work")
+        try:
+            while not runner._stop and runner.clock() < deadline:
+                now = runner.clock()
+                if camera_ok:
+                    frame = camera.read()
+                    if frame is not None and runner.stats.frames % 6 == 0:
+                        runner.on_frame(frame, now)
+                    elif frame is not None:
+                        runner.stats.frames += 1
+                runner.step(now)
+                time.sleep(cfg.sound.hold_poll_ms / 1000.0)
+        finally:
+            camera.release()
+    print()
+    print(
+        f"drill over: {runner.stats.tamper_events} tamper signal(s), "
+        f"{runner.stats.sirens} siren(s), {runner.stats.warnings} warning(s), "
+        f"signals: {', '.join(runner.stats.signals) or 'none'}"
+    )
+    return 0
+
+
 def sound_selftest(cfg: Config, stage: Stage, *, volume_pct: int | None = None) -> int:
     """Play one stage on the real speakers, forcing the audio path as an event would.
 
