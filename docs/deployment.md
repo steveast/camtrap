@@ -72,11 +72,13 @@ The Pi runs other unrelated jobs; camtrap keeps its own cron file, state directo
 ## The daily cycle
 
 1. **Leaving:** `guard`. Preflight refuses to arm if the camera, the sounds or the speakers fail.
-   Then it waits for the room to be still for 10 s and arms behind you.
+   Then it waits for the room to be still for 10 s and arms behind you. **On arming it locks the
+   screen and takes exclusive control of the power buttons**, so a single press can no longer
+   suspend the machine — the desktop never sees the event.
 2. **While away:** motion → spoken warning + frames + Telegram; power pulled, lid closed or case
    lifted → siren, session locked, 🚨 ahead of the queue. Heartbeat every 60 s.
-3. **Coming back:** unlock the screen. That disarms for 5 minutes, so picking the laptop up is
-   silent.
+3. **Coming back:** unlock the screen. That disarms for 5 minutes — picking the laptop up is
+   silent — and hands the power buttons back, so you can switch the machine off as usual.
 4. **Powering off:** just switch the machine off. The agent notices systemd is stopping, marks the
    offline as expected and publishes a last heartbeat, so no "agent went silent" arrives.
 

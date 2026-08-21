@@ -126,7 +126,8 @@ def cmd_arm_and_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
         f"Warning on motion in {','.join(cfg.sound.warn_langs) or 'no languages'}, "
         f"siren at {cfg.sound.volume_pct}% on tampering."
     )
-    print("Unlock the screen when you come back — that disarms it.")
+    print("On arming: the screen locks and the power buttons stop working.")
+    print("Unlock the screen when you come back — that disarms it and hands the buttons back.")
     print()
     _time.sleep(1.0)
     return run_forever(cfg)

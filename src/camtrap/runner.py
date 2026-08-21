@@ -80,6 +80,8 @@ class Runner:
         self._stop = False
         self._last_housekeeping = float("-inf")
         self._warned_event: str | None = None
+        self._armed_actions_done = False
+        self._power_grab = None
         self.responder.set_gate(self.arming.gate)
 
     def request_stop(self, *_: object) -> None:
@@ -87,15 +89,68 @@ class Runner:
 
     def finish(self) -> None:
         """Close an event that is still open, so its manifest is complete on disk."""
+        self.on_disarmed()
         if self.events.active is not None:
             closed = self.events.close(now=self.clock())
             log.emit("event_flush", id=closed.event_id, frames=closed.frames_written)
         # One last drain attempt: frames already acknowledged are gone, the rest stay spooled.
         self.uploader.drain(now=self.clock(), limit=32)
 
+    def on_armed(self) -> None:
+        """Once, when the trap goes live: lock the screen and take the power buttons.
+
+        The owner has left the room. An unlocked session is a way into the machine and a way to
+        stop the agent; an unguarded power button is one press away from suspending the machine and
+        ending the trap, because KDE acts on that press before logind ever sees it.
+        """
+        if self._armed_actions_done:
+            return
+        self._armed_actions_done = True
+
+        if self.cfg.sound.lock_on_arm:
+            try:
+                self.responder._run([*self.cfg.sound.loginctl_cmd, "lock-session"])
+                log.emit("armed_action", action="screen_locked")
+            except Exception as exc:
+                log.emit("armed_action_failed", action="lock", why=str(exc))
+
+        if self.cfg.sound.grab_power_button:
+            try:
+                from . import inputdev
+
+                buttons = inputdev.power_buttons(inputdev.scan())
+                if buttons:
+                    grab = inputdev.Grab(buttons)
+                    held = grab.acquire()
+                    if held:
+                        self._power_grab = grab
+                        log.emit("armed_action", action="power_button_grabbed", devices=held)
+                    else:
+                        log.emit("armed_action_failed", action="power_grab", why="no device opened")
+            except Exception as exc:
+                log.emit("armed_action_failed", action="power_grab", why=str(exc))
+
+    def on_disarmed(self) -> None:
+        """Hand the power buttons back. The owner is here; they may want to switch it off."""
+        if not self._armed_actions_done:
+            return
+        self._armed_actions_done = False
+        if self._power_grab is not None:
+            self._power_grab.release()
+            self._power_grab = None
+            log.emit("disarmed_action", action="power_button_released")
+
+    def _sync_armed_actions(self, now: float) -> None:
+        allowed, _reason = self.arming.gate(Stage.SIREN, now)
+        if allowed:
+            self.on_armed()
+        else:
+            self.on_disarmed()
+
     def step(self, now: float) -> list[tamper_mod.Signal]:
         """One iteration: arming state, tamper poll, sound, hold, then network work."""
         self.arming.poll(now=now)
+        self._sync_armed_actions(now)
         self.responder.hold_tick(now=now)
         signals = self.monitor.poll(now=now)
         self.stats.ticks += 1

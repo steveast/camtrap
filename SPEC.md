@@ -392,17 +392,24 @@ password. The defence is therefore layered, strongest and least intrusive first:
 2. **Lock the session.** On `tamper` the agent calls `loginctl lock-session`. Without the password
    there is no terminal, no process to kill, no shutdown menu — the keyboard stops being a way to
    reach the agent at all, while still being a way for the owner to identify themselves.
-3. **Inhibitors.** `camtrap run` holds `handle-power-key` alongside `sleep`, `idle` and
-   `handle-lid-switch`, so a short press of the power button and a closed lid no longer stop the
-   machine. Holding the power button for several seconds still cuts power in hardware; nothing in
-   software can prevent that.
-4. **Optional `EVIOCGRAB` on external input devices** (default off). Devices other than the
+3. **Inhibitors, and why they are not enough on their own.** `camtrap run` holds
+   `handle-power-key` alongside `sleep`, `idle` and `handle-lid-switch`. That stops *logind* from
+   acting — but on this desktop KDE's PowerDevil holds the same locks in `block` mode and handles
+   the press itself, and its configured action is suspend, which kills the trap outright. So while
+   armed the agent also takes an **exclusive evdev grab of the power-button devices**, and then
+   neither logind nor the desktop ever sees the event. Verified on the target machine: both
+   `Power Button` devices grab and release cleanly. Holding the button for several seconds still
+   cuts power in hardware; nothing in software can prevent that.
+4. **The screen locks when the trap arms.** The owner has left the room, so an unlocked session is
+   both a way into the machine and a way to stop the agent. Unlocking disarms and hands the power
+   buttons back — the same gesture that already opens the grace window.
+5. **Optional `EVIOCGRAB` on external input devices** (default off). Devices other than the
    built-in keyboard — a wireless keyboard, a USB audio dongle with media buttons — can be
    grabbed exclusively for the duration of the burst without locking the owner out;
    `camtrap input-scan` lists which devices report mute and volume keys. The grab is released
    when the file descriptor closes, so killing the agent cannot leave input captured — a required
    fail-safe.
-5. **Magic SysRq is already closed** on the target machine: `kernel.sysrq = 16` allows only
+6. **Magic SysRq is already closed** on the target machine: `kernel.sysrq = 16` allows only
    `sync`, so `Alt+SysRq+B` (reboot) and `Alt+SysRq+F` (OOM kill) are unavailable. This must stay
    that way — raising it to `1` or `438` for convenience would reopen a one-keystroke kill.
 

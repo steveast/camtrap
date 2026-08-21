@@ -85,6 +85,20 @@ def grabbable(devices: list[InputDevice]) -> list[InputDevice]:
     return [d for d in devices if d.can_mute and not d.is_keyboard]
 
 
+def power_buttons(devices: list[InputDevice]) -> list[InputDevice]:
+    """The dedicated power-button devices, which are not keyboards.
+
+    Kept separate from `grabbable`: this set is grabbed for the whole armed period, not just for
+    the duration of a burst, because a single press would otherwise suspend the machine and end
+    the trap.
+    """
+    return [
+        d
+        for d in devices
+        if KEY_POWER in d.keys and not d.is_keyboard and "power" in d.name.lower()
+    ]
+
+
 class Grab:
     """Exclusive grab over a set of devices, released on close (and therefore on kill -9)."""
 

@@ -97,7 +97,7 @@ def test_motion_plays_the_warning_not_the_siren(wired):
     assert runner.spawned.played("warn-vi.ogg")
     assert runner.spawned.played("warn-en.ogg")
     assert not runner.spawned.played("siren.ogg")
-    assert not cmds.ran("lock-session")
+    assert cmds.count("lock-session") <= 1  # from arming, not from the warning
 
 
 def test_hold_tick_runs_every_step_while_playing(wired):
@@ -178,7 +178,9 @@ def test_motion_in_frame_plays_the_warning_only(framed):
     assert runner.stats.warnings >= 1
     assert runner.spawned.played("warn-vi.ogg")
     assert not runner.spawned.played("siren.ogg")
-    assert not cmds.ran("lock-session")
+    # The session is locked once, by arming. A warning must not lock anything by itself:
+    # stage 1 is a notice, not a confrontation.
+    assert cmds.count("lock-session") <= 1
 
 
 def test_motion_writes_frames_and_a_manifest(framed):
@@ -302,3 +304,95 @@ def test_a_failing_uploader_never_stops_the_loop(framed, capsys):
     assert runner.stats.frames == 6, "the camera path kept running"
     assert runner.stats.motion_events >= 1
     assert "housekeeping_error" in capsys.readouterr().out
+
+
+# --- what happens the moment the trap goes live -------------------------------------------------
+
+
+def test_arming_locks_the_screen_once(wired):
+    """The owner has left: an unlocked session is a way in, and a way to stop the agent."""
+    runner, _sysfs, _session, cmds = wired
+    runner.cfg.sound.grab_power_button = False
+    runner.step(0.0)
+    assert not cmds.ran("lock-session"), "not armed yet: the exit delay is still running"
+    runner.step(70.0)
+    assert cmds.ran("lock-session")
+    before = cmds.count("lock-session")
+    runner.step(80.0)
+    assert cmds.count("lock-session") == before, "lock once, not on every tick"
+
+
+def test_locking_on_arm_can_be_disabled(wired):
+    runner, _sysfs, _session, cmds = wired
+    runner.cfg.sound.lock_on_arm = False
+    runner.cfg.sound.grab_power_button = False
+    runner.step(0.0)
+    runner.step(70.0)
+    assert not cmds.ran("lock-session")
+
+
+def test_the_power_buttons_are_grabbed_while_armed(wired, monkeypatch):
+    """systemd-inhibit is not enough: KDE acts on the press before logind sees it."""
+    from camtrap import inputdev
+
+    released = []
+
+    class FakeGrab:
+        def __init__(self, devices):
+            self.devices = devices
+
+        def acquire(self):
+            return len(self.devices)
+
+        def release(self):
+            released.append(True)
+
+    runner, _sysfs, session, _cmds = wired
+    monkeypatch.setattr(
+        inputdev,
+        "scan",
+        lambda *a, **k: [
+            inputdev.InputDevice("event1", "Power Button", frozenset({inputdev.KEY_POWER}))
+        ],
+    )
+    monkeypatch.setattr(inputdev, "Grab", FakeGrab)
+
+    runner.step(0.0)
+    runner.step(70.0)
+    assert isinstance(runner._power_grab, FakeGrab), "armed: the buttons must be held"
+
+    # unlocking hands them back — the owner is here and may want to switch the machine off
+    session.locked = False
+    runner.step(71.0)
+    assert released, "disarming must release the power buttons"
+    assert runner._power_grab is None
+
+
+def test_finish_releases_the_power_buttons(wired, monkeypatch):
+    from camtrap import inputdev
+
+    released = []
+
+    class FakeGrab:
+        def __init__(self, devices):
+            pass
+
+        def acquire(self):
+            return 1
+
+        def release(self):
+            released.append(True)
+
+    runner, _sysfs, _session, _cmds = wired
+    monkeypatch.setattr(
+        inputdev,
+        "scan",
+        lambda *a, **k: [
+            inputdev.InputDevice("event1", "Power Button", frozenset({inputdev.KEY_POWER}))
+        ],
+    )
+    monkeypatch.setattr(inputdev, "Grab", FakeGrab)
+    runner.step(0.0)
+    runner.step(70.0)
+    runner.finish()
+    assert released, "however the run ends, the buttons go back"

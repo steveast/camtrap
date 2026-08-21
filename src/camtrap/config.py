@@ -167,6 +167,15 @@ class SoundConfig:
     lock_session_on_tamper: bool = True
     loginctl_cmd: list[str] = field(default_factory=lambda: ["loginctl"])
     grab_external_input: bool = False
+    # Lock the screen when the trap arms. The owner has left the room; an unlocked session is a
+    # way into the machine and a way to stop the agent.
+    lock_on_arm: bool = True
+    # Take exclusive control of the power buttons while armed. systemd-inhibit is not enough here:
+    # KDE's PowerDevil holds handle-power-key in block mode and acts on the press itself (with
+    # PowerButtonAction=1 it suspends, which kills the trap outright). Grabbing the evdev device
+    # means neither logind nor the desktop ever sees the event. Holding the button for several
+    # seconds still cuts power in hardware — nothing in software can prevent that.
+    grab_power_button: bool = True
     # Observation mode: decide and log exactly as in a real run, but play nothing. This is how a
     # false-positive test gets measured without a siren going off in an empty flat.
     dry_run: bool = False
