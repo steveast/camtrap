@@ -396,3 +396,75 @@ def test_finish_releases_the_power_buttons(wired, monkeypatch):
     runner.step(70.0)
     runner.finish()
     assert released, "however the run ends, the buttons go back"
+
+
+def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
+    """The owner's idea: if the press cannot switch the machine off, let it set off the alarm.
+
+    Holding the button for several seconds still cuts power in hardware — but the siren now starts
+    on the first press, so those seconds are loud ones.
+    """
+    from camtrap import inputdev
+
+    class FakeGrab:
+        def __init__(self, devices):
+            self.queue = [inputdev.KEY_POWER]
+
+        def acquire(self):
+            return 1
+
+        def release(self):
+            pass
+
+        def read_key_presses(self):
+            codes, self.queue = self.queue, []
+            return codes
+
+    runner, _sysfs, _session, cmds = wired
+    monkeypatch.setattr(
+        inputdev,
+        "scan",
+        lambda *a, **k: [
+            inputdev.InputDevice("event1", "Power Button", frozenset({inputdev.KEY_POWER}))
+        ],
+    )
+    monkeypatch.setattr(inputdev, "Grab", FakeGrab)
+
+    runner.step(0.0)
+    runner.step(70.0)  # armed: buttons grabbed, queue holds one press
+    runner.step(71.0)
+
+    assert "power_button_pressed" in runner.stats.signals
+    assert runner.spawned.played("siren.ogg"), "a press while armed must be audible"
+    assert cmds.ran("lock-session")
+
+
+def test_reading_input_never_ends_the_run(wired, monkeypatch, capsys):
+    from camtrap import inputdev
+
+    class ExplodingGrab:
+        def __init__(self, devices):
+            pass
+
+        def acquire(self):
+            return 1
+
+        def release(self):
+            pass
+
+        def read_key_presses(self):
+            raise OSError("device vanished")
+
+    runner, _sysfs, _session, _cmds = wired
+    monkeypatch.setattr(
+        inputdev,
+        "scan",
+        lambda *a, **k: [
+            inputdev.InputDevice("event1", "Power Button", frozenset({inputdev.KEY_POWER}))
+        ],
+    )
+    monkeypatch.setattr(inputdev, "Grab", ExplodingGrab)
+    runner.step(0.0)
+    runner.step(70.0)
+    runner.step(71.0)  # must not raise
+    assert "input_read_failed" in capsys.readouterr().out

@@ -87,6 +87,11 @@ class Arming:
         self._started: float | None = None
         self._last_activity: float | None = None
         self._still_since: float | None = None
+        #: Once on_still has fired, the trap STAYS armed. Recomputing it per tick meant that a
+        #: person walking in disarmed the trap by being there — and then pulling the cable was
+        #: silent, because the gate said "waiting for quiet". Movement is what the alarm is for;
+        #: it cannot also be what switches it off.
+        self._latched_at: float | None = None
         manual = state.read_manual_arm(cfg.root)
         self._manual_since: float | None = manual
 
@@ -102,6 +107,11 @@ class Arming:
     def disarm_manually(self) -> None:
         state.clear_manual_arm(self.cfg.root)
         self._manual_since = None
+        self._latched_at = None
+        # Restart the stillness clock too, or on_still re-arms on the next tick using the quiet
+        # that was already banked — and the disarm the owner just asked for lasts one tick.
+        self._still_since = None
+        self._last_activity = None
 
     def note_activity(self, *, now: float) -> None:
         """The detector saw movement: the owner is (probably) still in the room."""
@@ -128,6 +138,9 @@ class Arming:
         elif not locked and self._locked:
             self._unlocked_at = now
             self._locked_since = None
+            # Only the owner knows the password, so an unlock is the one signal allowed to undo a
+            # latched arm.
+            self._latched_at = None
             log.emit("arming", event="unlocked", grace=self.cfg.arming.grace_after_unlock_sec)
         self._locked = locked
 
@@ -142,17 +155,24 @@ class Arming:
         candidates: list[float] = []
         if self._manual_since is not None:
             candidates.append(self._manual_since)
-        if mode == "on_still" and now is not None:
-            still_for = self.cfg.arming.arm_when_still_sec
-            if self._still_since is not None and now - self._still_since >= still_for:
-                candidates.append(self._still_since + still_for)
-            elif (
-                self._started is not None
-                and now - self._started >= self.cfg.arming.arm_deadline_sec
-            ):
-                # The room never went quiet — a curtain, a fan, a street window. Arm anyway
-                # rather than leaving the trap disarmed for the whole trip.
-                candidates.append(self._started + self.cfg.arming.arm_deadline_sec)
+        if mode == "on_still":
+            if self._latched_at is not None:
+                candidates.append(self._latched_at)
+            elif now is not None:
+                still_for = self.cfg.arming.arm_when_still_sec
+                if self._still_since is not None and now - self._still_since >= still_for:
+                    self._latched_at = self._still_since + still_for
+                    log.emit("arming", event="latched", at=round(self._latched_at, 1))
+                    candidates.append(self._latched_at)
+                elif (
+                    self._started is not None
+                    and now - self._started >= self.cfg.arming.arm_deadline_sec
+                ):
+                    # The room never went quiet — a curtain, a fan, a street window. Arm anyway
+                    # rather than leaving the trap disarmed for the whole trip.
+                    self._latched_at = self._started + self.cfg.arming.arm_deadline_sec
+                    log.emit("arming", event="latched", reason="deadline")
+                    candidates.append(self._latched_at)
         if mode == "always":
             # Armed for the lifetime of the run; the exit delay is measured from start() so a
             # unit restart while the owner is in the room does not sound immediately.

@@ -49,10 +49,38 @@ case "${1:-arm}" in
         shift || true
         run_logged guard "$@"
         ;;
+    start)
+        # Detached: its own session, no controlling terminal, journal to the log file. Closing the
+        # window — or the whole terminal application — cannot touch it. This is the one to use when
+        # something else is running in the same terminal, a Claude session for instance.
+        shift || true
+        if pgrep -f "camtrap (run|guard)" >/dev/null 2>&1; then
+            echo "guard: already running (pid $(pgrep -f 'camtrap (run|guard)' | head -1))"
+            echo "       stop it with: guard off"
+            exit 1
+        fi
+        mkdir -p "$LOG_DIR"
+        printf '\n=== %s : camtrap guard (detached) ===\n' "$(date -Is)" >> "$LOG"
+        setsid env PYTHONPATH="$REPO/src" "$PY" -m camtrap --log-file "$LOG" guard "$@" \
+            </dev/null >>"$LOG" 2>&1 &
+        sleep 3
+        if pgrep -f "camtrap.*guard" >/dev/null 2>&1; then
+            echo "guard: running detached, pid $(pgrep -f 'camtrap.*guard' | head -1)"
+            echo "       follow it with: guard logs 40   |   stop it with: guard off"
+            tail -n 12 "$LOG"
+        else
+            echo "guard: failed to start — last lines of the log:"
+            tail -n 15 "$LOG"
+            exit 1
+        fi
+        ;;
     off|stop)
         # Coming back for good: pause first so the poller does not report "went silent".
         run pause
-        pkill -f "camtrap.*(run|guard)" 2>/dev/null || true
+        # TERM, not KILL: the agent has an exit path that releases the power buttons, closes the
+        # open event and tells the receiver this offline was deliberate.
+        pkill -TERM -f "camtrap.*(run|guard)" 2>/dev/null || true
+        sleep 2
         echo "guard: stopped and paused"
         ;;
     status)  shift || true; run status "$@" ;;
@@ -125,7 +153,8 @@ case "${1:-arm}" in
         cat <<'USAGE'
 guard — laptop camera trap
 
-  guard              preflight, then arm when the room goes quiet, then run
+  guard              preflight, then arm when the room goes quiet, then run (in this terminal)
+  guard start        the same, detached: survives closing the window or the terminal app
   guard --still 15   arm after 15 s of quiet instead of the default 30
   guard off          stop and mark the offline as expected (do this instead of closing the window)
   guard status       mode, arming state, spool, sound readiness

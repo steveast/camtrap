@@ -20,10 +20,11 @@ AC_OFFLINE = "ac_offline"
 LID_CLOSED = "lid_closed"
 CAMERA_GONE = "camera_gone"
 SCENE_SHIFT = "scene_shift"
+POWER_BUTTON = "power_button_pressed"
 
 #: Signals that make noise. `camera_gone` is deliberately absent by default: a bus glitch is more
 #: plausible than a hand on the cable of a built-in camera (spec section 10, item 5).
-SIREN_SIGNALS = frozenset({AC_OFFLINE, LID_CLOSED, SCENE_SHIFT})
+SIREN_SIGNALS = frozenset({AC_OFFLINE, LID_CLOSED, SCENE_SHIFT, POWER_BUTTON})
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,11 @@ KEY_POWER = 116
 KEY_A = 30
 
 EVIOCGRAB = 0x40044590
+
+#: struct input_event on 64-bit Linux: struct timeval (two 64-bit words), then type, code, value.
+EVENT_FORMAT = "llHHi"
+EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
+EV_KEY = 0x01
 
 SYSFS_INPUT = "/sys/class/input"
 
@@ -131,3 +137,32 @@ class Grab:
                 fcntl.ioctl(fd, EVIOCGRAB, 0)
             os.close(fd)
         self._fds = []
+
+    def read_key_presses(self) -> list[int]:
+        """Key codes pressed since the last call, from the devices we hold.
+
+        Holding the device means the press reaches nobody else — so it is ours to act on. A power
+        button that cannot switch the machine off but CAN set off the siren is a better trade than
+        one that does neither: even a several-second hold, which cuts power in hardware, now buys
+        the room several seconds of siren first.
+        """
+        pressed: list[int] = []
+        for fd in self._fds:
+            while True:
+                try:
+                    data = os.read(fd, EVENT_SIZE * 16)
+                except BlockingIOError:
+                    break
+                except OSError:
+                    break
+                if not data:
+                    break
+                for offset in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
+                    _sec, _usec, etype, code, value = struct.unpack(
+                        EVENT_FORMAT, data[offset : offset + EVENT_SIZE]
+                    )
+                    if etype == EV_KEY and value == 1:
+                        pressed.append(code)
+                if len(data) < EVENT_SIZE * 16:
+                    break
+        return pressed

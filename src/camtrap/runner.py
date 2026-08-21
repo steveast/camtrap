@@ -130,6 +130,25 @@ class Runner:
             except Exception as exc:
                 log.emit("armed_action_failed", action="power_grab", why=str(exc))
 
+    def _power_button_presses(self, now: float) -> list[tamper_mod.Signal]:
+        """A press on the power button we are holding is interference, not a shutdown request."""
+        if self._power_grab is None:
+            return []
+        try:
+            from . import inputdev
+
+            codes = self._power_grab.read_key_presses()
+        except Exception as exc:
+            log.emit("input_read_failed", why=str(exc))
+            return []
+        if inputdev.KEY_POWER not in codes:
+            return []
+        return [
+            self.monitor.report_external(
+                tamper_mod.POWER_BUTTON, detail="power button pressed while armed", now=now
+            )
+        ]
+
     def on_disarmed(self) -> None:
         """Hand the power buttons back. The owner is here; they may want to switch it off."""
         if not self._armed_actions_done:
@@ -153,6 +172,7 @@ class Runner:
         self._sync_armed_actions(now)
         self.responder.hold_tick(now=now)
         signals = self.monitor.poll(now=now)
+        signals.extend(self._power_button_presses(now))
         self.stats.ticks += 1
         if signals:
             self._tamper(signals, now=now)

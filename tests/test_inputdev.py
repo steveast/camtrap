@@ -52,3 +52,36 @@ def test_grab_reports_failures_without_raising(tmp_path, capsys):
     assert grab.acquire() == 0  # /dev/input/event0 not openable in the test environment
     grab.release()
     assert "input_grab_failed" in capsys.readouterr().out
+
+
+def test_key_presses_are_parsed_from_evdev_events(tmp_path):
+    """The press we intercept is ours to act on — so it has to be decoded correctly."""
+    import os
+    import struct
+
+    from camtrap.inputdev import EV_KEY, EVENT_FORMAT, KEY_POWER, Grab, InputDevice
+
+    fifo = tmp_path / "fake-event"
+    # A regular file stands in for the character device: Grab only reads from the descriptor.
+    payload = b"".join(
+        [
+            struct.pack(EVENT_FORMAT, 1, 0, EV_KEY, KEY_POWER, 1),  # press
+            struct.pack(EVENT_FORMAT, 1, 0, EV_KEY, KEY_POWER, 0),  # release, ignored
+            struct.pack(EVENT_FORMAT, 1, 0, 0x04, 4, 5),  # EV_MSC, ignored
+        ]
+    )
+    fifo.write_bytes(payload)
+
+    device = InputDevice(
+        "fake-event", "Power Button", frozenset({KEY_POWER}), dev_root=str(tmp_path)
+    )
+    grab = Grab([device])
+    # open it ourselves: EVIOCGRAB on a regular file fails, which is fine for this test
+    fd = os.open(device.path, os.O_RDONLY | os.O_NONBLOCK)
+    grab._fds = [fd]
+    try:
+        assert grab.read_key_presses() == [KEY_POWER]
+        assert grab.read_key_presses() == []  # nothing left to read
+    finally:
+        os.close(fd)
+        grab._fds = []

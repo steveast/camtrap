@@ -199,3 +199,39 @@ def test_pause_still_wins_in_on_still_mode(still, cfg):
     still.note_quiet(now=0.0)
     write_mode(cfg.root, MODE_PAUSED, now=1.0)
     assert still.gate(Stage.SIREN, now=100.0) == (False, "paused")
+
+
+def test_movement_after_arming_does_not_disarm(still):
+    """The bug this fixes: a person walking in disarmed the trap by being there.
+
+    on_still decides WHEN to arm. Once armed, movement is the thing the alarm exists for — it
+    cannot also be the thing that switches it off, or pulling the cable in front of the camera
+    would be silent.
+    """
+    still.note_quiet(now=0.0)
+    assert still.gate(Stage.SIREN, now=31.0)[0], "quiet for 30 s: armed"
+
+    still.note_activity(now=40.0)  # someone walks in
+    allowed, reason = still.gate(Stage.SIREN, now=41.0)
+    assert allowed, f"must stay armed while someone is in the room, got {reason}"
+
+    still.note_activity(now=60.0)
+    assert still.gate(Stage.SIREN, now=61.0)[0]
+
+
+def test_unlocking_is_the_one_thing_that_undoes_a_latched_arm(still, session):
+    session.locked = True
+    still.poll(now=0.0)  # establish the locked baseline first
+    still.note_quiet(now=0.0)
+    assert still.gate(Stage.SIREN, now=31.0)[0]
+    session.locked = False
+    still.poll(now=32.0)  # now it is a transition, and a transition is what opens the grace
+    allowed, reason = still.gate(Stage.SIREN, now=33.0)
+    assert not allowed and reason == "unlock_grace"
+
+
+def test_a_manual_disarm_also_clears_the_latch(still):
+    still.note_quiet(now=0.0)
+    assert still.gate(Stage.SIREN, now=31.0)[0]
+    still.disarm_manually()
+    assert not still.gate(Stage.SIREN, now=32.0)[0]
