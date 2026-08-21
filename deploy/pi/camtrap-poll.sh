@@ -47,20 +47,6 @@ CTL_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 SSH_MUX="-o ControlMaster=auto -o ControlPath=$CTL_DIR/camtrap-poll-%C -o ControlPersist=90"
 [ "${SSH_MULTIPLEX:-1}" = "1" ] || SSH_MUX=""
 
-# Sub-minute cadence without a second scheduler. cron is the coarsest part of the whole chain:
-# it fires once a minute, so an event waits 0-60 s (mean 30) before anyone even looks. With
-# POLL_PASSES>1 the cron tick makes several passes inside its minute, and a crash still self-heals
-# on the next one. Each pass is a child, so a failure in one does not skip the rest.
-if [ "${POLL_PASSES:-1}" -gt 1 ] && [ -z "${CAMTRAP_POLL_CHILD:-}" ]; then
-    pass=0
-    while [ "$pass" -lt "${POLL_PASSES}" ]; do
-        CAMTRAP_POLL_CHILD=1 "$0" || true
-        pass=$((pass + 1))
-        [ "$pass" -lt "${POLL_PASSES}" ] && sleep "${POLL_INTERVAL_SEC:-15}"
-    done
-    exit 0
-fi
-
 mkdir -p "$STATE_DIR"
 
 log() { logger -t camtrap-poll "$*" 2>/dev/null || echo "camtrap-poll $*" >&2; }
@@ -68,6 +54,46 @@ log() { logger -t camtrap-poll "$*" 2>/dev/null || echo "camtrap-poll $*" >&2; }
 remote() { # shellcheck disable=SC2086
     ${CAMTRAP_SSH} ${SSH_MUX} "$@"
 }
+
+# Sub-minute cadence without a second scheduler. cron is the coarsest part of the whole chain: it
+# fires once a minute, so an event waits 0-60 s (mean 30) before anyone even looks. With
+# POLL_PASSES>1 the cron tick makes several passes inside its minute, and a crash still self-heals
+# on the next tick. Each pass is a child, so a failure in one does not skip the rest.
+#
+# Two guards, because a run that spans most of a minute can meet the next cron tick:
+#
+#   - one run at a time. Two overlapping runs would both see the same unsent event and both send
+#     it, and a duplicate alert is exactly what teaches you to stop reading them. The lock is taken
+#     non-blocking, so the late run gives up: the winner is already doing the work.
+#   - a budget. Passes stop once the run has spent POLL_BUDGET_SEC, handing the minute back
+#     instead of colliding with its successor.
+if [ "${POLL_PASSES:-1}" -gt 1 ] && [ -z "${CAMTRAP_POLL_CHILD:-}" ]; then
+    LOCK="$STATE_DIR/poll.lock"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$LOCK"
+        flock -n 9 || { log "skip reason=already_running"; exit 0; }
+    else
+        mkdir "$LOCK.d" 2>/dev/null || { log "skip reason=already_running"; exit 0; }
+        trap 'rmdir "$LOCK.d" 2>/dev/null || true' EXIT INT TERM
+    fi
+    started=$(date +%s)
+    budget="${POLL_BUDGET_SEC:-50}"
+    interval="${POLL_INTERVAL_SEC:-15}"
+    pass=0
+    while [ "$pass" -lt "${POLL_PASSES}" ]; do
+        CAMTRAP_POLL_CHILD=1 "$0" || true
+        pass=$((pass + 1))
+        [ "$pass" -lt "${POLL_PASSES}" ] || break
+        elapsed=$(( $(date +%s) - started ))
+        if [ $((elapsed + interval)) -ge "$budget" ]; then
+            log "passes_cut pass=$pass of ${POLL_PASSES} elapsed=${elapsed}s budget=${budget}s"
+            break
+        fi
+        sleep "$interval"
+    done
+    exit 0
+fi
+
 
 send_message() {
     printf '%s\n%s\n%s' "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_CHAT_ID" "$1" | remote send-message

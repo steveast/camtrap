@@ -8,7 +8,7 @@ survive an unreachable receiver, and the token never leaves the Pi.
    LAPTOP (in the room)                RECEIVER (VPS, abroad)          PI (at home)
  ┌──────────────────────────┐        ┌───────────────────────┐      ┌────────────────────────┐
  │ guard            ← typed │        │ camtrap-recv.sh       │      │ camtrap-poll.sh        │
- │  └─ camtrap run          │        │  write-only, forced   │      │  cron: every minute    │
+ │  └─ camtrap run          │        │  write-only, forced   │      │  cron: 4x per minute   │
  │      ├─ camera 1080p/q95 │  ssh   │  put-frame/heartbeat  │      │                        │
  │      ├─ detector (MOG2)  │───────▶│                       │      │ reads: list, state,    │
  │      ├─ events + spool   │ 1 conn │ ~/camtrap/inbox/      │◀─────│        manifest        │
@@ -61,7 +61,7 @@ Pi's key cannot write. Verified in both directions.
 | What | Where |
 |---|---|
 | poller | `/usr/local/bin/camtrap-poll.sh` (755 root) |
-| schedule | `/etc/cron.d/camtrap-poll` — `* * * * * <poller user>`, its own file |
+| schedule | `/etc/cron.d/camtrap-poll` — `* * * * * <poller user>`, its own file; `POLL_PASSES=4` makes four passes inside each minute |
 | token and settings | `/etc/camtrap-poll.env` (600, poller user) — the only copy of the bot token |
 | state | `/var/lib/camtrap-poll/` — `sent-*`, `fail-*`, `last-armed`, `last-tamper`, `motion-alerts` |
 | key to receiver | `~<poller user>/.ssh/camtrap-pi` — generated on the Pi, never travelled |

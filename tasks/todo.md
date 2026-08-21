@@ -270,3 +270,34 @@ Found while fixing, not in the review:
 - [x] A dead camera logged one line per retry: 28 MB in two seconds on a stub.
 - [x] The unified loop slept 250 ms on frames that had already arrived — 7.3 fps became 3.4 fps.
       Caught by measuring the live rate, not by the suite. Now 6.9 fps.
+
+## Reaction time, 2026-08-21 (after the 30-minute run)
+
+Reported: "it barely reacts to motion, and the messages arrive late." Both real, neither where I
+would have guessed. Measured before changing anything.
+
+- [x] **Detection is not slow — the threshold is a cliff.** Above `min_area_pct` a verdict takes
+      two frames (0.29 s at the measured 6.8 fps); below it, never, however long you stand there.
+      Live triggers that afternoon: 3.05, 3.11, 5.5, 5.5, 6.92, 7.78, 10.76, 11.17, 11.37,
+      22.07 % against a threshold of 3.0 — two of them within 0.05 of the cutoff, so everything
+      weaker was dropped silently.
+- [x] Confirmation counted over a window (2 of 5) instead of consecutive frames, and one frame at
+      `instant_area_pct` (7 %) is motion outright. Replayed over 29 real captures: same 7 person
+      events caught, one frame sooner in the median, no new false event among the 22 empty-room
+      ones.
+- [x] `--trace` logs every analysed frame's changed_pct. The `log_ticks` knob had existed since S0
+      with nothing reading it, so the number for a frame that did NOT fire was unobservable.
+- [ ] **`min_area_pct` stays at 3.0 until the curtain is masked.** Same replay: 2.0 % took false
+      events from 1 of 22 to 4 of 22. Next physical step, needs wind in the room:
+      `guard suggest-mask --sec 120`, then `guard mask`, then drop the threshold to 2.0.
+- [x] **Telegram was 37-60 s late** (event id against the Pi's journal: 37, 46, 55, 60 s). Deployed
+      to the Pi: four passes per cron minute (`POLL_PASSES=4`, `POLL_INTERVAL_SEC=15`) and ssh
+      connection reuse. Measured after: a pass costs ~2 s instead of 8-10 s, gaps 16-17 s instead
+      of 60, 24 passes over six minutes with no overlap and no cut passes.
+- [x] A run now spans most of its minute, so two guards: a non-blocking lock (two runs would both
+      send the same event — a duplicate alert is what teaches you to stop reading them) and a
+      `POLL_BUDGET_SEC` that hands the minute back. Both exercised on a stand.
+- [x] **Alerts were still leading with an empty room** — two of four sends used `_000.jpg`, the
+      oldest pre-buffer frame. The manifest sorts ahead of the frames it names, so it arrives
+      naming one that is still uploading and the fallback took the lowest number. Fallback is now
+      the newest frame present, and the album follows the key frame with the newest frames.
