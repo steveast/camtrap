@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import log
+from .atomic import write_atomic
 
 MODE_ARMED = "armed"
 MODE_PAUSED = "paused"
@@ -53,7 +54,7 @@ def write_mode(state_dir: Path, name: str, *, now: float | None = None) -> Mode:
         raise ValueError(f"unknown mode: {name}")
     state_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.time() if now is None else now
-    (state_dir / "mode").write_text(f"{name} {stamp:.0f}\n")
+    write_atomic(state_dir / "mode", f"{name} {stamp:.0f}\n", durable=False)
     log.emit("mode", name=name)
     return Mode(name, stamp)
 
@@ -72,7 +73,7 @@ def read_manual_arm(state_dir: Path) -> float | None:
 def write_manual_arm(state_dir: Path, *, now: float | None = None) -> float:
     state_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.time() if now is None else now
-    (state_dir / "armed").write_text(f"{stamp:.0f}\n")
+    write_atomic(state_dir / "armed", f"{stamp:.0f}\n", durable=False)
     log.emit("arm", source="manual")
     return stamp
 

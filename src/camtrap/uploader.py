@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import log
+from .atomic import write_atomic
 from .config import Config
 
 
@@ -148,7 +149,7 @@ class LocalSink:
         try:
             state = self.inbox.parent / "state"
             state.mkdir(parents=True, exist_ok=True)
-            (state / "heartbeat").write_text(line)
+            write_atomic(state / "heartbeat", line, durable=False)
         except OSError as exc:
             return SinkResult(False, f"state unusable: {exc}")
         return SinkResult(True, "stored")
@@ -181,7 +182,10 @@ class MegaSink:
             scale = wanted / width
             frame = cv2.resize(frame, (wanted, int(height * scale)), interpolation=cv2.INTER_AREA)
         params = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.upload.mega_quality]
-        return bool(cv2.imwrite(str(target), frame, params))
+        ok, buffer = cv2.imencode(".jpg", frame, params)
+        # That folder is watched by a sync client: a partially written file would be uploaded as
+        # the finished article and never corrected.
+        return bool(ok) and write_atomic(target, buffer.tobytes(), durable=False)
 
     def send(self, path: Path) -> SinkResult:
         target_dir = self.cfg.mega_dir

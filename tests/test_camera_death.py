@@ -10,19 +10,19 @@ Detection and tamper are independent paths; the loop must not couple them.
 
 import numpy as np
 import pytest
+from tests.fakes import FakeProcess, FakeRunner
 
 from camtrap.arming import Arming
 from camtrap.camera import Camera
 from camtrap.player import SoundResponder
 from camtrap.runner import Runner
 from camtrap.tamper import TamperMonitor
-from tests.fakes import FakeProcess, FakeRunner
 
 
 class DeadCapture:
     """Opens fine, never delivers a frame: a USB camera that dropped off the bus."""
 
-    def isOpened(self):  # noqa: N802
+    def isOpened(self):
         return True
 
     def set(self, *args):

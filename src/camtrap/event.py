@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from . import __version__, log
+from .atomic import write_atomic
 from .config import Config
 from .detector import EventKind
 
@@ -227,7 +228,10 @@ class EventWriter:
         index = event.frames_written
         path = self.cfg.spool_dir / f"{event.event_id}_{index:03d}.jpg"
         params = [int(cv2.IMWRITE_JPEG_QUALITY), self.cfg.event.jpeg_quality]
-        if not cv2.imwrite(str(path), frame, params):
+        # Encode first, then write in one step: imwrite streams into the very file the uploader is
+        # about to list, so a frame could be sent while it was still being written.
+        ok, buffer = cv2.imencode(".jpg", frame, params)
+        if not ok or not write_atomic(path, buffer.tobytes()):
             log.emit("frame_error", id=event.event_id, index=index)
             return
         event.frames_written = index + 1
@@ -258,5 +262,8 @@ class EventWriter:
             "sound_latency_ms": event.sound_latency_ms,
             "sound_evidence_confirmed": event.sound_evidence_confirmed,
         }
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        # The manifest says whether this event was tamper or motion. A torn one is read as a
+        # missing type, and the alert loses the only thing that distinguishes a thief from a
+        # cleaner — so it is written whole or not at all.
+        write_atomic(path, json.dumps(payload, indent=2, sort_keys=True))
         return path

@@ -580,3 +580,82 @@ def test_the_burst_ends_and_the_throttle_returns(framed):
         small[10:40, 10:40] = 80
         runner.on_frame(small, now=300.0 + tick)
     assert event.frames_written <= after_burst + 1, "the throttle must come back"
+
+
+def test_the_siren_waits_for_the_first_frame_to_be_acknowledged(framed, sysfs):
+    """Evidence first, noise second — wired, not just wireable.
+
+    `SoundResponder.set_ack_waiter` existed from the start and nothing but a test had ever called
+    it, so every manifest written in the field said `sound_evidence_confirmed: false` and the
+    siren fired before anything left the box. This asserts the production wiring, because the
+    failure is invisible: the siren still sounds, the promise just quietly does not hold.
+    """
+    runner, blank, _cmds = framed
+    order: list[str] = []
+
+    class Watching:
+        """Acknowledges whatever is queued, and records when it was asked."""
+
+        def __init__(self, spool):
+            self.spool = spool
+
+        def drain(self, **_kwargs):
+            from camtrap.uploader import UploadReport
+
+            report = UploadReport()
+            for path in self.spool.pending():
+                order.append(f"sent:{path.name}")
+                report.acknowledged.append(path.name)
+                report.sent.append(path.name)
+                self.spool.acknowledge(path.name)
+            return report
+
+        def heartbeat(self, line):
+            return True
+
+    runner.uploader = Watching(runner.spool)
+    runner.responder._spawn = lambda argv, duration: (
+        order.append("sound") or FakeProcess(argv=argv, duration=duration, started=0.0)
+    )
+    sysfs.set_ac(0)
+    runner.step(80.0)
+    runner.step(81.5)  # the debounce confirms the pull
+
+    assert runner.stats.sirens == 1
+    assert "sound" in order, "the siren must still play"
+    frames_sent = [item for item in order if item.startswith("sent:") and item.endswith(".jpg")]
+    assert frames_sent, "the tamper frame must have been offered to the receiver"
+    assert order.index(frames_sent[0]) < order.index("sound"), (
+        f"evidence must leave before the noise starts, got {order}"
+    )
+
+
+def test_a_dead_uplink_does_not_delay_the_siren_past_the_cap(framed, sysfs):
+    """The wait is bounded. An uplink that only fails must not hold the sound hostage."""
+    runner, _blank, _cmds = framed
+    runner.cfg.sound.delay_max_sec = 1.0
+    slept: list[float] = []
+    runner.sleep = slept.append
+    elapsed = {"t": 100.0}
+
+    def clock():
+        elapsed["t"] += 0.3  # every look at the clock costs time, as it does in the real thing
+        return elapsed["t"]
+
+    class OnlyFails:
+        def drain(self, **_kwargs):
+            from camtrap.uploader import UploadReport
+
+            return UploadReport(failed=["evt_x_000.jpg"])
+
+        def heartbeat(self, line):
+            return True
+
+    runner.uploader = OnlyFails()
+    runner.clock = clock
+    sysfs.set_ac(0)
+    runner.step(100.0)
+    runner.step(101.5)
+
+    assert runner.stats.sirens == 1, "the siren fires anyway"
+    assert sum(slept) <= 2.0, f"the wait must stay bounded, slept {slept}"

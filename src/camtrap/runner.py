@@ -81,6 +81,7 @@ class Runner:
         self.stats = LoopStats()
         self._stop = False
         self._last_housekeeping = float("-inf")
+        self._last_drain = float("-inf")
         self._warned_event: str | None = None
         self._armed_actions_done = False
         #: The most recent decoded frame, so a tamper signal that arrives between frames (power,
@@ -89,6 +90,7 @@ class Runner:
         self._last_frame: np.ndarray | None = None
         self._burst_until = float("-inf")
         self._camera_gone_reported = False
+        self.responder.set_ack_waiter(self._await_evidence)
         self._power_grab: object | None = None
         self.responder.set_gate(self.arming.gate)
 
@@ -189,11 +191,14 @@ class Runner:
 
     def motion(self, now: float) -> None:
         """Stage 1: someone is in the room."""
+        started = self.clock()
         result = self.responder.on_motion(now=now)
         if result.played:
             self.stats.warnings += 1
             self.events.mark_sound(
-                stage=Stage.WARNING.value, evidence_confirmed=result.evidence_confirmed
+                stage=Stage.WARNING.value,
+                latency_ms=int((self.clock() - started) * 1000),
+                evidence_confirmed=result.evidence_confirmed,
             )
 
     # --- camera path ---------------------------------------------------------
@@ -247,6 +252,36 @@ class Runner:
             self.responder.end_event()
         self._housekeeping(now)
         return detection.kind
+
+    def _await_evidence(self, timeout: float) -> bool:
+        """Get the picture off the box before the room gets loud — but never wait long.
+
+        `mark_tamper` has already put this event at the head of the queue, so one drain sends the
+        manifest and the first frame ahead of everything else. The wait is capped: a siren that
+        waits on a dead uplink is a siren that never sounds, and the point of the sound is that it
+        works with no network at all.
+
+        This is spec 3.5 "evidence first, noise second", which until now existed only as a setter
+        nothing called — every manifest in the field reads `sound_evidence_confirmed: false`.
+        """
+        deadline = self.clock() + timeout
+        while True:
+            # Delivery must never be able to stop the siren. This wait sits between a tamper
+            # signal and the sound, so an exception escaping here would silence the alarm — the
+            # one failure mode the whole design refuses to allow.
+            try:
+                report = self.uploader.drain(now=self.clock(), limit=2)
+            except Exception as exc:
+                log.emit("evidence_wait_error", why=f"{type(exc).__name__}: {exc}")
+                return False
+            if any(not name.endswith(".json") for name in report.acknowledged):
+                return True
+            if not report.failed:
+                return False  # nothing waiting, or nothing that can be sent
+            if self.clock() >= deadline:
+                log.emit("evidence_wait_expired", timeout=round(timeout, 2))
+                return False
+            self.sleep(min(0.25, self.cfg.spool.drain_interval_sec))
 
     def pump(
         self,
@@ -314,11 +349,14 @@ class Runner:
         self.events.note_motion(now=now)
         if not tamper_mod.plays_siren(signals):
             return
+        started = self.clock()
         result = self.responder.on_tamper(names, now=now)
         if result.played:
             self.stats.sirens += 1
             self.events.mark_sound(
-                stage=Stage.SIREN.value, evidence_confirmed=result.evidence_confirmed
+                stage=Stage.SIREN.value,
+                latency_ms=int((self.clock() - started) * 1000),
+                evidence_confirmed=result.evidence_confirmed,
             )
 
     def _housekeeping(self, now: float) -> None:
@@ -334,7 +372,9 @@ class Runner:
             log.emit("housekeeping_error", why=f"{type(exc).__name__}: {exc}")
 
     def _housekeeping_inner(self, now: float) -> None:
-        self.uploader.drain(now=now, limit=8)
+        if now - self._last_drain >= self.cfg.spool.drain_interval_sec:
+            self._last_drain = now
+            self.uploader.drain(now=now, limit=8)
         if self.heartbeat.due(now=now):
             self.heartbeat.maybe_send(
                 build_heartbeat(

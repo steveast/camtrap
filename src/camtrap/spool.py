@@ -11,10 +11,22 @@ Two rules from the spec that the code has to make impossible to break:
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from stat import S_ISREG
 
 from . import log
+from .atomic import PART_SUFFIX
 from .config import Config
+
+
+@dataclass(frozen=True, slots=True)
+class _Entry:
+    """A spool file as it was when we last looked: path, size, mtime — stat'ed once."""
+
+    path: Path
+    size: int
+    mtime: float
 
 
 def _event_id(name: str) -> str:
@@ -41,17 +53,36 @@ class Spool:
 
     # --- inventory -----------------------------------------------------------
 
-    def _files(self) -> list[Path]:
+    def _entries(self) -> list[_Entry]:
+        """One listing, one stat per file, vanished files skipped.
+
+        Every caller used to stat independently, and a file can disappear between the listing and
+        the stat — the uploader deletes on acknowledgement from the same directory. An unhandled
+        OSError here would have propagated out of housekeeping and into the run loop.
+        """
         root = self.cfg.spool_dir
         if not root.exists():
             return []
-        return [path for path in root.iterdir() if path.is_file()]
+        entries: list[_Entry] = []
+        for path in root.iterdir():
+            if path.name.endswith(PART_SUFFIX):
+                continue  # a frame still being written is not ready to be sent
+            try:
+                stat = path.stat()
+            except OSError:
+                continue  # acknowledged and unlinked while we were listing
+            if S_ISREG(stat.st_mode):  # a directory reports a size too; only files count
+                entries.append(_Entry(path, stat.st_size, stat.st_mtime))
+        return entries
+
+    def _files(self) -> list[Path]:
+        return [entry.path for entry in self._entries()]
 
     def depth(self) -> int:
-        return len(self._files())
+        return len(self._entries())
 
     def total_bytes(self) -> int:
-        return sum(path.stat().st_size for path in self._files())
+        return sum(entry.size for entry in self._entries())
 
     def mark_tamper(self, event_id: str) -> None:
         """Tamper artefacts jump the queue: the siren waits on their acknowledgement."""
@@ -94,50 +125,61 @@ class Spool:
         self._copied.discard(name)
         return True
 
-    def _droppable(self) -> list[Path]:
+    def _droppable(self, entries: list[_Entry]) -> list[_Entry]:
         """Mid-event frames, cloud-copied ones first. Manifests and first frames are excluded."""
         candidates = [
-            path
-            for path in self._files()
-            if not path.name.endswith(".json") and _frame_index(path.name) not in (0, None)
+            entry
+            for entry in entries
+            if not entry.path.name.endswith(".json")
+            and _frame_index(entry.path.name) not in (0, None)
         ]
         candidates.sort(
-            key=lambda path: (
-                0 if path.name in self._copied else 1,  # copied ones have some chance elsewhere
-                path.stat().st_mtime,  # then oldest first
+            key=lambda entry: (
+                0 if entry.path.name in self._copied else 1,  # copied ones have a chance elsewhere
+                entry.mtime,  # then oldest first
             )
         )
         return candidates
 
     def enforce_cap(self) -> list[str]:
+        """Drop mid-event frames until the spool fits, counting down from one measurement.
+
+        The total used to be recomputed inside the loop, which meant a full listing and a stat of
+        every remaining file per dropped frame: on a spool that needed 943 drops that took 1.79 s,
+        all of it inside the run loop, all of it while a siren might be due. Subtracting the size
+        of what we just deleted gives the same answer for one listing.
+        """
         cap = self.cfg.spool.max_mb * 1024 * 1024
         dropped: list[str] = []
-        if self.total_bytes() <= cap:
+        entries = self._entries()
+        total = sum(entry.size for entry in entries)
+        if total <= cap:
             return dropped
-        for path in self._droppable():
-            if self.total_bytes() <= cap:
+        for entry in self._droppable(entries):
+            if total <= cap:
                 break
-            name = path.name
-            size = path.stat().st_size
+            name = entry.path.name
+            was_copied = name in self._copied
             try:
-                path.unlink()
+                entry.path.unlink()
             except OSError:
                 continue
+            total -= entry.size
             self._copied.discard(name)
             dropped.append(name)
-            log.emit("drop", file=name, bytes=size, reason="spool cap", copied=name in self._copied)
-        if self.total_bytes() > cap:
+            log.emit("drop", file=name, bytes=entry.size, reason="spool cap", copied=was_copied)
+        if total > cap:
             log.emit("drop_incomplete", reason="only first frames and manifests remain")
         return dropped
 
     def enforce_retention(self, *, now: float | None = None) -> list[str]:
         cutoff = (now or time.time()) - self.cfg.spool.retention_days * 86400
         removed: list[str] = []
-        for path in self._files():
-            if path.stat().st_mtime < cutoff:
-                name = path.name
+        for entry in self._entries():
+            if entry.mtime < cutoff:
+                name = entry.path.name
                 try:
-                    path.unlink()
+                    entry.path.unlink()
                 except OSError:
                     continue
                 removed.append(name)

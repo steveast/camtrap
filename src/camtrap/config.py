@@ -118,6 +118,11 @@ class SpoolConfig:
     retention_days: int = 14
     upload_retry_max_sec: float = 300.0
     upload_retry_base_sec: float = 2.0
+    #: How often the spool is drained from the run loop. The loop ticks every 250 ms and each
+    #: drain lists and sorts the whole spool, so draining per tick spent the capture path's time
+    #: on a queue that had not changed. Evidence does not wait on this: a tamper signal drains
+    #: straight away, before the siren.
+    drain_interval_sec: float = 1.0
 
 
 @dataclass
