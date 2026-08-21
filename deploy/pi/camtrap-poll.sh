@@ -192,14 +192,27 @@ for event in $events; do
     : "${stamp:=$(date -u +%s)}"
     when=$(local_time "$stamp")
 
-    case "$type" in
-        tamper)
+    # A power-button press outranks everything else in this list. It is not "handling": the
+    # machine was armed and screaming, and someone reached for the one control that can end
+    # that. Holding it for several seconds cuts power in hardware, so these frames may be the
+    # last ones this laptop ever sends — that has to be legible at a glance, half asleep.
+    case "$type,$signals" in
+        tamper,*power_button_pressed*)
+            tamper_seen=1
+            icon="🆘"
+            headline="POWER BUTTON PRESSED — someone is trying to switch the laptop off"
+            urgent="
+⚠️ The press was blocked and the siren is sounding, but holding the button for
+   several seconds cuts power in hardware. These frames may be the last ones."
+            ;;
+        tamper,*)
             tamper_seen=1
             icon="🚨"
             headline="the laptop is being handled"
+            urgent=""
             ;;
-        light) icon="💡"; headline="light switched on" ;;
-        *) icon="📷"; headline="movement in the room" ;;
+        light,*) icon="💡"; headline="light switched on"; urgent="" ;;
+        *) icon="📷"; headline="movement in the room"; urgent="" ;;
     esac
 
     # An unclosed manifest means the agent stopped while the event was still running — the
@@ -214,7 +227,7 @@ type: $type${signals:+
 signals: $signals}
 frames: $frames${key_pct:+
 motion: $key_pct% of frame}${sound:+
-sound: $sound}$cut_short"
+sound: $sound}$cut_short$urgent"
 
     now_epoch=$(date -u +%s)
     if [ "$type" != "tamper" ] && ! motion_budget_left "$now_epoch"; then

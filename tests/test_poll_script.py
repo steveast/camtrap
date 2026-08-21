@@ -397,3 +397,39 @@ def test_recovery_still_reports_immediately(rig):
     rig.run()
     bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
     assert any("🟢" in b for b in bodies)
+
+
+def test_a_power_button_press_gets_its_own_wording(rig):
+    """Not "handling": someone reached for the one control that ends the alarm."""
+    rig.add_event(
+        "evt_20260821T070000Z",
+        "tamper",
+        frames=12,
+        signals=["power_button_pressed", "ac_offline"],
+        sound="siren",
+        key="evt_20260821T070000Z_004.jpg",
+    )
+    rig.run()
+    body = rig.body(rig.deliveries()[0])
+    assert "🆘" in body
+    assert "POWER BUTTON PRESSED" in body
+    assert "may be the last ones" in body, "the reader has to know the stakes"
+    assert "🚨" not in body, "the generic tamper wording must not also appear"
+
+
+def test_other_tamper_signals_keep_the_ordinary_wording(rig):
+    rig.add_event("evt_20260821T071000Z", "tamper", frames=4, signals=["ac_offline"], sound="siren")
+    rig.run()
+    body = rig.body(rig.deliveries()[0])
+    assert "🚨" in body
+    assert "being handled" in body
+    assert "POWER BUTTON" not in body
+    assert "last ones" not in body
+
+
+def test_motion_is_unaffected(rig):
+    rig.add_event("evt_20260821T072000Z", "motion", frames=6)
+    rig.run()
+    body = rig.body(rig.deliveries()[0])
+    assert "📷" in body and "movement in the room" in body
+    assert "🆘" not in body

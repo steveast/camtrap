@@ -76,6 +76,16 @@ If you are shutting the machine down or packing it away, run `camtrap pause` fir
 poller reports "the agent went silent" a few minutes later. `camtrap resume` when you set it up
 again; the systemd unit does both automatically on stop and start.
 
+## When a 🆘 arrives (power button)
+
+The most serious message the system sends. It means the trap was armed and sounding, and someone
+pressed the power button — the one control that can silence it. The press itself was blocked, but
+holding the button for several seconds cuts power in hardware, so **treat those frames as the last
+ones**: save them out of the chat immediately, before anything else.
+
+Then act as for a 🚨 below. The distinction matters for the conversation with the hotel: a pulled
+cable can be an accident, a pressed power button on an alarming laptop cannot.
+
 ## When a 🚨 arrives
 
 1. **Do not rush back into the room.** The alert already carries the frame; the evidence is off

@@ -464,8 +464,14 @@ Cron every 2 minutes, in the style and discipline of the owner's external prober
 
 - Pulls the list of new events from the VPS and sends the first frame to Telegram with a caption
   (local time, event type, frame count); the remaining frames follow as an album.
-- A `tamper` event → 🚨 as its own message ahead of the queue: first frame, the list of signals
-  that fired, local time, and whether the siren played. Mixing it with ordinary motion is not
+- A `tamper` event → 🚨 as its own message ahead of the queue: the key frame, the list of signals
+  that fired, local time, and whether the siren played.
+- A `tamper` event carrying `power_button_pressed` gets **its own wording**: 🆘 and "POWER BUTTON
+  PRESSED — someone is trying to switch the laptop off", plus a line saying these frames may be
+  the last ones. It is not the same situation as a cable being pulled: the machine was armed and
+  audible, and someone reached for the one control that ends that. Holding the button cuts power
+  in hardware, so this may be the final message the laptop sends — and that has to be legible at
+  a glance, to someone half asleep. Mixing it with ordinary motion is not
   acceptable: the owner reacts differently to "someone came in" and to "the laptop is in
   someone's hands".
 - Watches the heartbeat: older than `HB_STALE_SEC = 300` while `armed` → 🔴 "the agent went
