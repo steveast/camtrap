@@ -201,6 +201,11 @@ class SoundConfig:
 
 @dataclass
 class ArmingConfig:
+    #: How often the session lock state is read. Every read is a `loginctl` subprocess — 1.9 ms
+    #: measured on this machine — and the loop ticks four times a second, so polling per tick meant
+    #: ~345k spawns a day, each one able to block the loop for its 5 s timeout. A second of lag on
+    #: noticing the screen lock is invisible next to a 60 s exit delay.
+    lock_poll_sec: float = 1.0
     # on_lock  — armed once the screen is locked (unattended machine)
     # on_still — armed once the room has been still for arm_when_still_sec (owner walked out)
     # always   — armed for the lifetime of the run

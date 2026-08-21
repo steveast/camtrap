@@ -92,6 +92,7 @@ class Arming:
         #: silent, because the gate said "waiting for quiet". Movement is what the alarm is for;
         #: it cannot also be what switches it off.
         self._latched_at: float | None = None
+        self._last_lock_poll = float("-inf")
         manual = state.read_manual_arm(cfg.root)
         self._manual_since: float | None = manual
 
@@ -124,6 +125,9 @@ class Arming:
             self._still_since = now
 
     def poll(self, *, now: float) -> None:
+        if now - self._last_lock_poll < self.cfg.arming.lock_poll_sec:
+            return
+        self._last_lock_poll = now
         locked = self._session.locked_hint()
         if locked is None:
             return

@@ -1,5 +1,5 @@
 #!/bin/sh
-# camtrap poller — runs on the Pi at home, from cron, every 2 minutes.
+# camtrap poller — runs on the Pi at home, from cron, every minute.
 #
 # The token lives here and nowhere else. Frames stay on the VPS: this script asks the VPS to send
 # them, so the picture crosses the network once. Discipline copied from the external prober:

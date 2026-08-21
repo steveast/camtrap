@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,7 +53,7 @@ class Summary:
         return self.would_sirens + self.would_warnings
 
 
-def summarise(lines: list[str]) -> Summary:
+def summarise(lines: Iterable[str]) -> Summary:
     summary = Summary()
     for line in lines:
         parsed = parse_line(line)
@@ -149,7 +150,16 @@ def render(summary: Summary, *, source: str) -> str:
 
 
 def from_file(path: Path) -> tuple[Summary, str]:
+    """Summarise a log without holding it in memory.
+
+    A 24-hour run at four ticks a second is a large file, and this command exists precisely for
+    the day after such a run — on a laptop that is also running the trap. Streaming keeps the peak
+    at one line whether the log is 2 MB or 2 GB.
+    """
     if not path.exists():
         return Summary(), f"{path} (missing)"
-    lines = path.read_text(errors="replace").splitlines()
-    return summarise(lines), str(path)
+    try:
+        with path.open(errors="replace") as handle:
+            return summarise(handle), str(path)
+    except OSError as exc:
+        return Summary(), f"{path} (unreadable: {type(exc).__name__})"

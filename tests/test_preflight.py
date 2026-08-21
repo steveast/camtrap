@@ -2,7 +2,7 @@
 
 import pytest
 
-from camtrap import runner
+from camtrap import modes
 
 
 @pytest.fixture
@@ -21,22 +21,22 @@ def _rows(rows):
 
 
 def test_missing_sound_files_block_arming(cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "fake"))
-    ready, rows = runner.preflight(cfg)
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (True, "fake"))
+    ready, rows = modes.preflight(cfg)
     assert not ready
     assert _rows(rows)["sound files"][0] is False
 
 
 def test_a_silent_audio_path_blocks_arming(ready_cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (False, "no sink"))
-    ready, rows = runner.preflight(ready_cfg)
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (False, "no sink"))
+    ready, rows = modes.preflight(ready_cfg)
     assert not ready
     assert _rows(rows)["speakers"] == (False, "no sink")
 
 
 def test_a_missing_receiver_is_a_warning_not_a_blocker(ready_cfg, monkeypatch):
     """Frames still accumulate locally and the siren needs no network at all."""
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "sink"))
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (True, "sink"))
     from camtrap import selftest
 
     monkeypatch.setattr(
@@ -44,15 +44,15 @@ def test_a_missing_receiver_is_a_warning_not_a_blocker(ready_cfg, monkeypatch):
     )
     ready_cfg.upload.local_inbox = ""
     ready_cfg.upload.ssh_target = ""
-    ready, rows = runner.preflight(ready_cfg)
+    ready, rows = modes.preflight(ready_cfg)
     assert ready, "no receiver must not stop the trap from arming"
     assert _rows(rows)["receiver"][0] is True
 
 
 def test_a_dead_camera_blocks_arming(ready_cfg, monkeypatch):
-    monkeypatch.setattr(runner, "audio_probe", lambda cfg, restore=False: (True, "sink"))
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (True, "sink"))
     ready_cfg.camera.device = "/nonexistent/video9"
-    ready, rows = runner.preflight(ready_cfg)
+    ready, rows = modes.preflight(ready_cfg)
     assert not ready
     assert _rows(rows)["camera"][0] is False
 
@@ -65,9 +65,9 @@ def test_probe_can_be_skipped(ready_cfg, monkeypatch):
     )
     called = []
     monkeypatch.setattr(
-        runner, "audio_probe", lambda cfg, restore=False: called.append(1) or (True, "x")
+        modes, "audio_probe", lambda cfg, restore=False: called.append(1) or (True, "x")
     )
-    ready, rows = runner.preflight(ready_cfg, probe=False)
+    ready, rows = modes.preflight(ready_cfg, probe=False)
     assert ready and not called
     assert _rows(rows)["speakers"][1] == "probe skipped"
 
@@ -76,7 +76,7 @@ def test_audio_probe_reports_a_missing_sink(cfg, monkeypatch):
     from camtrap.player import AudioPath
 
     monkeypatch.setattr(AudioPath, "prepare", lambda self, *, volume_pct: None)
-    ok, detail = runner.audio_probe(cfg)
+    ok, detail = modes.audio_probe(cfg)
     assert not ok and "no sink" in detail
 
 
@@ -84,7 +84,7 @@ def test_audio_probe_reports_a_missing_siren_file(cfg, monkeypatch):
     from camtrap.player import AudioPath
 
     monkeypatch.setattr(AudioPath, "prepare", lambda self, *, volume_pct: "sink")
-    ok, detail = runner.audio_probe(cfg)
+    ok, detail = modes.audio_probe(cfg)
     assert not ok and "no siren file" in detail
 
 
@@ -100,10 +100,10 @@ def test_a_standalone_check_puts_the_audio_profile_back(cfg, monkeypatch):
     cfg.siren_path.write_bytes(b"siren")
     cfg.shutter_path.write_bytes(b"click")
 
-    runner.audio_probe(cfg, restore=True)
+    modes.audio_probe(cfg, restore=True)
     assert restored, "a check restores"
     restored.clear()
-    runner.audio_probe(cfg, restore=False)
+    modes.audio_probe(cfg, restore=False)
     assert not restored, "arming keeps the speakers"
 
 
@@ -115,13 +115,13 @@ def test_watch_does_not_write_to_the_cloud_folder(cfg):
     """
     cfg.upload.sinks = ["prod", "mega"]
     # No sounds generated in cfg, so watch() bails out right after adjusting the config.
-    assert runner.watch(cfg, minutes=0.01) == 1
+    assert modes.watch(cfg, minutes=0.01) == 1
     assert cfg.upload.sinks == ["prod"]
 
 
 def test_drill_does_not_write_to_the_cloud_folder(cfg):
     cfg.upload.sinks = ["prod", "mega"]
-    assert runner.drill(cfg, seconds=0.01) == 1
+    assert modes.drill(cfg, seconds=0.01) == 1
     assert cfg.upload.sinks == ["prod"]
 
 
@@ -138,5 +138,5 @@ def test_watch_arms_itself_when_paused_and_restores_after(cfg):
         cfg.warn_path(lang).write_bytes(b"w")
     cfg.camera.device = "/nonexistent/video9"  # bail out right after arming
 
-    runner.watch(cfg, minutes=0.01)
+    modes.watch(cfg, minutes=0.01)
     assert state.read_mode(cfg.root).paused, "the paused state must be put back"

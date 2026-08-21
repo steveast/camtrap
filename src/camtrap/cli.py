@@ -46,7 +46,7 @@ def cmd_status(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 
 
 def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
-    from .runner import run_forever
+    from .lifecycle import run_forever
 
     missing = sounds.missing_sounds(cfg)
     if missing:
@@ -56,7 +56,7 @@ def cmd_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 
 
 def cmd_watch(cfg: config_mod.Config, args: argparse.Namespace) -> int:
-    from .runner import watch
+    from .modes import watch
 
     return watch(cfg, minutes=args.minutes, still=args.still)
 
@@ -77,14 +77,14 @@ def cmd_report(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 
 
 def cmd_drill(cfg: config_mod.Config, args: argparse.Namespace) -> int:
-    from .runner import drill
+    from .modes import drill
 
     return drill(cfg, volume_pct=args.volume, siren_sec=args.siren_sec, seconds=args.seconds)
 
 
 def cmd_preflight(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Everything that must hold before walking out of the room."""
-    from .runner import preflight
+    from .modes import preflight
 
     # A standalone check restores the audio profile; arming keeps the speakers.
     ready, rows = preflight(cfg, probe=not args.no_probe, restore_audio=True)
@@ -103,7 +103,8 @@ def cmd_arm_and_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
     """Preflight, then arm once the room goes quiet, then run. The command for walking out."""
     import time as _time
 
-    from .runner import preflight, run_forever
+    from .lifecycle import run_forever
+    from .modes import preflight
 
     print("camtrap — preflight")
     ready, rows = preflight(cfg, probe=not args.no_probe)
@@ -134,13 +135,13 @@ def cmd_arm_and_run(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 
 
 def cmd_siren_test(cfg: config_mod.Config, args: argparse.Namespace) -> int:
-    from .runner import sound_selftest
+    from .modes import sound_selftest
 
     return sound_selftest(cfg, Stage.SIREN, volume_pct=args.volume)
 
 
 def cmd_warn_test(cfg: config_mod.Config, args: argparse.Namespace) -> int:
-    from .runner import sound_selftest
+    from .modes import sound_selftest
 
     return sound_selftest(cfg, Stage.WARNING, volume_pct=args.volume)
 

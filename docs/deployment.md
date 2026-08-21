@@ -67,7 +67,8 @@ Pi's key cannot write. Verified in both directions.
 | key to receiver | `~<poller user>/.ssh/camtrap-pi` — generated on the Pi, never travelled |
 | journal | `journalctl -t camtrap-poll` |
 
-The Pi runs other unrelated jobs; camtrap keeps its own cron file, state directory and journal tag.
+The Pi runs other unrelated jobs; camtrap keeps its own cron file, state directory and
+journal tag so nothing it does can disturb them.
 
 ## The daily cycle
 

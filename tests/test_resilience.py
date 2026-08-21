@@ -8,7 +8,7 @@ laptop, and the poller repeated that alert eighteen times overnight.
 import signal
 from pathlib import Path
 
-from camtrap import log, runner
+from camtrap import lifecycle, log
 
 
 def test_sighup_and_sigpipe_are_ignored(cfg, monkeypatch):
@@ -17,18 +17,18 @@ def test_sighup_and_sigpipe_are_ignored(cfg, monkeypatch):
     def fake_signal(sig, handler):
         installed[sig] = handler
 
-    monkeypatch.setattr(runner.signal, "signal", fake_signal)
-    monkeypatch.setattr(runner.atexit, "register", lambda fn: None)
-    runner.harden_process(cfg)
+    monkeypatch.setattr(lifecycle.signal, "signal", fake_signal)
+    monkeypatch.setattr(lifecycle.atexit, "register", lambda fn: None)
+    lifecycle.harden_process(cfg)
     assert installed[signal.SIGHUP] is signal.SIG_IGN
     assert installed[signal.SIGPIPE] is signal.SIG_IGN
 
 
 def test_a_final_heartbeat_is_registered_for_exit(cfg, monkeypatch):
-    monkeypatch.setattr(runner.signal, "signal", lambda sig, handler: None)
+    monkeypatch.setattr(lifecycle.signal, "signal", lambda sig, handler: None)
     registered = []
-    monkeypatch.setattr(runner.atexit, "register", lambda fn: registered.append(fn))
-    runner.harden_process(cfg)
+    monkeypatch.setattr(lifecycle.atexit, "register", lambda fn: registered.append(fn))
+    lifecycle.harden_process(cfg)
     assert registered, "however the process ends, the receiver must be told"
 
 
@@ -90,12 +90,12 @@ def test_a_deliberate_shutdown_marks_the_offline_expected(cfg, monkeypatch):
     """The owner powers the machine off daily. Alerting on that trains them to ignore alerts."""
     from camtrap import state
 
-    monkeypatch.setattr(runner, "system_is_stopping", lambda: True)
+    monkeypatch.setattr(lifecycle, "system_is_stopping", lambda: True)
     published = []
-    monkeypatch.setattr(runner, "publish_heartbeat", lambda c: published.append(c) or True)
+    monkeypatch.setattr(lifecycle, "publish_heartbeat", lambda c: published.append(c) or True)
 
     state.write_mode(cfg.root, state.MODE_ARMED)
-    runner._final_word(cfg)
+    lifecycle._final_word(cfg)
 
     assert state.read_mode(cfg.root).paused, "a shutdown is an expected offline"
     assert published, "and the receiver has to be told before we go"
@@ -105,11 +105,11 @@ def test_a_crash_does_not_mark_the_offline_expected(cfg, monkeypatch):
     """If the machine is not shutting down, silence stays suspicious — that is the whole point."""
     from camtrap import state
 
-    monkeypatch.setattr(runner, "system_is_stopping", lambda: False)
-    monkeypatch.setattr(runner, "publish_heartbeat", lambda c: True)
+    monkeypatch.setattr(lifecycle, "system_is_stopping", lambda: False)
+    monkeypatch.setattr(lifecycle, "publish_heartbeat", lambda c: True)
 
     state.write_mode(cfg.root, state.MODE_ARMED)
-    runner._final_word(cfg)
+    lifecycle._final_word(cfg)
 
     assert not state.read_mode(cfg.root).paused, "an unexplained stop must stay an alert"
 
@@ -118,19 +118,19 @@ def test_system_is_stopping_reads_systemd(monkeypatch):
     class Result:
         stdout = "stopping\n"
 
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Result())
-    assert runner.system_is_stopping() is True
+    monkeypatch.setattr(lifecycle.subprocess, "run", lambda *a, **k: Result())
+    assert lifecycle.system_is_stopping() is True
 
     class Running:
         stdout = "running\n"
 
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Running())
-    assert runner.system_is_stopping() is False
+    monkeypatch.setattr(lifecycle.subprocess, "run", lambda *a, **k: Running())
+    assert lifecycle.system_is_stopping() is False
 
 
 def test_a_missing_systemctl_is_not_a_shutdown(monkeypatch):
     def boom(*args, **kwargs):
         raise OSError("no systemctl")
 
-    monkeypatch.setattr(runner.subprocess, "run", boom)
-    assert runner.system_is_stopping() is False
+    monkeypatch.setattr(lifecycle.subprocess, "run", boom)
+    assert lifecycle.system_is_stopping() is False

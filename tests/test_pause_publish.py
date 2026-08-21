@@ -36,7 +36,7 @@ def test_a_finished_run_tells_the_receiver_its_final_mode(cfg):
     """Otherwise the poller keeps a mid-run `armed`, sees silence, and reports a stolen laptop."""
     from pathlib import Path
 
-    from camtrap import runner, state
+    from camtrap import modes, state
 
     state.write_mode(cfg.root, state.MODE_PAUSED)
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +46,7 @@ def test_a_finished_run_tells_the_receiver_its_final_mode(cfg):
         cfg.warn_path(lang).write_bytes(b"w")
     cfg.camera.device = "/nonexistent/video9"  # ends the run right after arming
 
-    runner.watch(cfg, minutes=0.01)
+    modes.watch(cfg, minutes=0.01)
 
     heartbeat = Path(cfg.upload.local_inbox).parent / "state" / "heartbeat"
     assert heartbeat.exists(), "the run must leave the receiver a final heartbeat"
