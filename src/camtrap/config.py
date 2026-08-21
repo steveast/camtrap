@@ -43,7 +43,11 @@ class CameraConfig:
     # latency for smoothness, which is the wrong trade for a trap.
     buffer_frames: int = 1
     reopen_delay_sec: float = 2.0
-    max_reopen_attempts: int = 0  # 0 = retry forever
+    # After this many consecutive failures the camera counts as gone — which raises a tamper
+    # signal and shows up in the heartbeat. Reopening never stops (a USB glitch should self-heal);
+    # 0 disables the verdict entirely, which used to be the default and meant `camera_gone` could
+    # never fire at all.
+    max_reopen_attempts: int = 5
 
 
 @dataclass

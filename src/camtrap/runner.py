@@ -62,8 +62,10 @@ class Runner:
         camera: Camera | None = None,
         uploader: Uploader | None = None,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.cfg = cfg
+        self.sleep = sleep
         self.monitor = monitor if monitor is not None else tamper_mod.TamperMonitor(cfg)
         self.responder = responder if responder is not None else SoundResponder(cfg)
         self.arming = arming if arming is not None else Arming(cfg)
@@ -81,12 +83,13 @@ class Runner:
         self._last_housekeeping = float("-inf")
         self._warned_event: str | None = None
         self._armed_actions_done = False
-        self._power_grab = None
         #: The most recent decoded frame, so a tamper signal that arrives between frames (power,
         #: lid, the power button) still gets a picture of the room as it is, not just the
         #: pre-buffer from seconds earlier.
         self._last_frame: np.ndarray | None = None
         self._burst_until = float("-inf")
+        self._camera_gone_reported = False
+        self._power_grab: object | None = None
         self.responder.set_gate(self.arming.gate)
 
     def request_stop(self, *_: object) -> None:
@@ -245,6 +248,58 @@ class Runner:
         self._housekeeping(now)
         return detection.kind
 
+    def pump(
+        self,
+        camera: Camera,
+        *,
+        deadline: float | None = None,
+        max_iterations: int | None = None,
+    ) -> None:
+        """The one capture loop, used by run, watch and drill alike.
+
+        Its shape is the fix for the worst bug this project had: a frame is optional, `step()` is
+        not. Detection needs the camera; tamper polling, the siren and the heartbeat do not, and
+        coupling them meant a dead camera produced a silent trap.
+        """
+        iterations = 0
+        while not self._stop:
+            now = self.clock()
+            if deadline is not None and now >= deadline:
+                return
+            frame = camera.next_frame()
+            if frame is not None:
+                self.on_frame(frame, self.clock())
+            self.step(self.clock())
+            self._note_camera_state(camera, self.clock())
+            iterations += 1
+            if max_iterations is not None and iterations >= max_iterations:
+                return
+            # Idle: pace by the hold tick when frames are flowing, by the reopen delay when not.
+            self.sleep(
+                self.cfg.sound.hold_poll_ms / 1000.0
+                if frame is not None
+                else self.cfg.camera.reopen_delay_sec
+            )
+
+    def _note_camera_state(self, camera: Camera, now: float) -> None:
+        """Raise a tamper signal the first time the camera is declared gone.
+
+        A camera vanishing in a locked room is suspicious in itself, so it alerts — but without the
+        siren by default, because a bus glitch is more plausible than a hand on the cable of a
+        built-in camera (spec section 10, item 5).
+        """
+        if not camera.status.gone or self._camera_gone_reported:
+            if not camera.status.gone:
+                self._camera_gone_reported = False
+            return
+        self._camera_gone_reported = True
+        if not self.cfg.tamper.camera_gone_is_tamper:
+            return
+        signal_ = self.monitor.report_external(
+            tamper_mod.CAMERA_GONE, detail="capture device stopped delivering frames", now=now
+        )
+        self._tamper([signal_], now=now)
+
     def _tamper(self, signals: list[tamper_mod.Signal], *, now: float, frame=None) -> None:
         self.stats.tamper_events += 1
         self.stats.signals.extend(s.name for s in signals)
@@ -299,43 +354,6 @@ class Runner:
         self._last_housekeeping = now
         self.spool.enforce_cap()
         self.spool.enforce_retention()
-
-    def run(self, *, max_ticks: int | None = None) -> LoopStats:
-        signal.signal(signal.SIGTERM, self.request_stop)
-        signal.signal(signal.SIGINT, self.request_stop)
-        started = self.clock()
-        self.started = started
-        self.arming.start(now=started)
-        log.emit(
-            "start",
-            mode=read_mode(self.cfg.root).name,
-            arming=self.cfg.arming.mode,
-            langs=",".join(self.cfg.sound.warn_langs) or "-",
-            inhibit=bool(self.inhibitor and self.inhibitor.active),
-        )
-        interval = max(0.05, self.cfg.tamper.poll_sec)
-        hold = max(0.05, self.cfg.sound.hold_poll_ms / 1000.0)
-        ticks = 0
-        next_poll = started
-        while not self._stop:
-            now = self.clock()
-            if now >= next_poll:
-                self.step(now)
-                next_poll = now + interval
-                ticks += 1
-                if max_ticks is not None and ticks >= max_ticks:
-                    break
-            else:
-                self.responder.hold_tick(now=now)
-            time.sleep(hold)
-        log.emit(
-            "stop",
-            ticks=self.stats.ticks,
-            tamper=self.stats.tamper_events,
-            sirens=self.stats.sirens,
-            warnings=self.stats.warnings,
-        )
-        return self.stats
 
 
 def system_is_stopping() -> bool:
@@ -409,24 +427,16 @@ def run_forever(cfg: Config) -> int:
         signal.signal(signal.SIGTERM, runner.request_stop)
         signal.signal(signal.SIGINT, runner.request_stop)
         if not camera.open():
-            log.emit("warn", reason="camera unavailable at start; tamper monitoring continues")
+            # Not a warning to shrug at: with no camera there are no frames and no scene-shift
+            # signal. The cable, the lid and the power button are still watched, and a camera that
+            # stays away is itself reported as tamper by pump().
+            log.emit("warn", reason="camera did not open; sysfs signals only until it comes back")
         try:
-            for frame in camera.frames():
-                now = runner.clock()
-                runner.on_frame(frame, now)
-                runner.step(now)
-                if runner._stop:
-                    break
+            runner.pump(camera)
         finally:
             runner.finish()
             camera.release()
             publish_heartbeat(cfg)
-            if camera.status.gone and cfg.tamper.camera_gone_is_tamper:
-                now = runner.clock()
-                signal_ = runner.monitor.report_external(
-                    tamper_mod.CAMERA_GONE, detail="capture device disappeared", now=now
-                )
-                runner._tamper([signal_], now=now)
             log.emit(
                 "stop",
                 frames=runner.stats.frames,
@@ -574,16 +584,10 @@ def _watch_body(cfg: Config, *, minutes: float, still: float) -> int:
         signal.signal(signal.SIGINT, runner.request_stop)
         signal.signal(signal.SIGTERM, runner.request_stop)
         if not camera.open():
-            print("camera unavailable — nothing to observe")
-            return 1
+            print("camera unavailable — observing the sysfs signals only")
         log.emit("start", mode="watch", arming=cfg.arming.mode, minutes=minutes, dry_run=True)
         try:
-            for frame in camera.frames():
-                now = runner.clock()
-                runner.on_frame(frame, now)
-                runner.step(now)
-                if runner._stop or now >= deadline:
-                    break
+            runner.pump(camera, deadline=deadline)
         finally:
             runner.finish()
             camera.release()
@@ -672,16 +676,7 @@ def drill(
             camera=camera_ok,
         )
         try:
-            while not runner._stop and runner.clock() < deadline:
-                now = runner.clock()
-                if camera_ok:
-                    frame = camera.read()
-                    if frame is not None and runner.stats.frames % 6 == 0:
-                        runner.on_frame(frame, now)
-                    elif frame is not None:
-                        runner.stats.frames += 1
-                runner.step(now)
-                time.sleep(cfg.sound.hold_poll_ms / 1000.0)
+            runner.pump(camera, deadline=deadline)
         finally:
             runner.finish()
             camera.release()

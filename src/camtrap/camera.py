@@ -48,6 +48,7 @@ class Camera:
         self._cap: object | None = None
         self.status = CameraStatus()
         self._analysed: deque[float] = deque(maxlen=40)
+        self._failures = 0
         self._raw_interval: float | None = None
         self._last_raw: float | None = None
         self._stride = max(1, cfg.camera.capture_fps // max(1, cfg.camera.target_fps))
@@ -74,7 +75,11 @@ class Camera:
         opened = bool(self._cap is not None and self._cap.isOpened())
         first = self.status.reopens == 0 and self.status.frames == 0
         self.status.opened = opened
-        if opened:
+        # A camera that is gone stays gone for hours; one line per retry would be the loudest
+        # thing in the log and would fill the log file with nothing new. Once the verdict is in,
+        # stay quiet — `camera_back` and `camera_gone` mark the transitions that matter.
+        quiet = self.status.gone
+        if opened and not quiet:
             log.emit(
                 "camera" if first else "camera_reopen",
                 device=self.cfg.camera.device,
@@ -82,7 +87,7 @@ class Camera:
                 stride=self._stride,
                 reopens=self.status.reopens,
             )
-        else:
+        elif not opened and not quiet:
             log.emit("camera_error", device=self.cfg.camera.device, reason="cannot open")
         return opened
 
@@ -134,39 +139,56 @@ class Camera:
                 )
         self._last_raw = now
 
+    def next_frame(self) -> np.ndarray | None:
+        """One attempt at one frame. Returns None on failure — never blocks indefinitely.
+
+        This is the contract the run loop needs. The previous generator retried internally forever
+        (max_reopen_attempts defaults to "retry forever"), so a camera that stopped delivering meant
+        the loop never got control back: tamper polling, the siren and the heartbeat all lived
+        inside that loop. A stub device measured 446 reopen attempts and zero frames yielded.
+        Losing the eyes must not cost the ears.
+        """
+        if self._cap is None and not self.open():
+            self._note_failure()
+            return None
+        skip = self._stride_now() - 1
+        frame = self.read() if skip <= 0 or self._skip(skip) else None
+        if frame is None:
+            self._note_failure()
+            return None
+        if self._failures or self.status.gone:
+            # The device came back. Say so, and stop claiming it is gone.
+            log.emit("camera_back", after_failures=self._failures)
+            self._failures = 0
+            self.status.gone = False
+        self._analysed.append(self.clock())
+        return frame
+
+    def _note_failure(self) -> None:
+        """Release, count, and decide whether the camera counts as gone — but keep trying."""
+        self.release()
+        self._failures += 1
+        self.status.reopens += 1
+        attempts = self.cfg.camera.max_reopen_attempts
+        if attempts and self._failures >= attempts and not self.status.gone:
+            self.status.gone = True
+            log.emit("camera_gone", failures=self._failures)
+
     def frames(self, *, limit: int | None = None):
-        """Yield frames at roughly target_fps, with a stride derived from the MEASURED rate.
+        """Yield decoded frames, skipping failures. Prefer next_frame() in the run loop.
 
-        A fixed stride of capture_fps // target_fps assumes the camera delivers what it advertises.
-        This one advertises 30 fps for MJPEG and measured 12.5 fps in evening light, because UVC
-        cameras lengthen exposure as light drops. The fixed stride then waited for six frames —
-        480 ms per analysis instead of 200 ms — and the driver queue backed up, so every frame
-        analysed was already old. That was the "huge delay".
-
-        So: measure the delivery interval, skip only as many frames as that rate justifies, and
-        when the camera is slower than the target, skip nothing at all.
+        Kept for the tools that only care about pictures (calibrate, mask, suggest-mask): it waits
+        out reopen delays on the caller's behalf, and gives up once the camera is declared gone so
+        it cannot hang a command forever.
         """
         produced = 0
-        failures = 0
         while limit is None or produced < limit:
-            if self._cap is None and not self.open():
-                frame = None
-            else:
-                skip = self._stride_now() - 1
-                frame = self.read() if skip <= 0 or self._skip(skip) else None
+            frame = self.next_frame()
             if frame is None:
-                failures += 1
-                self.release()
-                self.status.reopens += 1
-                attempts = self.cfg.camera.max_reopen_attempts
-                if attempts and failures > attempts:
-                    self.status.gone = True
-                    log.emit("camera_gone", failures=failures)
+                if self.status.gone:
                     return
                 self.sleep(self.cfg.camera.reopen_delay_sec)
                 continue
-            failures = 0
-            self._analysed.append(self.clock())
             produced += 1
             yield frame
 
