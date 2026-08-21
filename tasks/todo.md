@@ -236,3 +236,37 @@ The two-stage sound model was added after the first version of this list: origin
 only on `tamper`. Slice sizes grew by roughly 2 h in S1 (stage 1 plumbing, per-language files) and
 0.5 h in S2 (wiring motion to the warning), which the schedule below does not yet reflect —
 call it ~37 h rather than 34.5 h.
+
+## Review follow-up, 2026-08-21
+
+Full-project review for reliability; eleven findings, all closed. Order was the review's own: the
+critical one first, because the rest are degradations and that one was a missing function.
+
+- [x] **R1 (critical)** A dead camera silenced the whole trap. Tamper polling lived inside the
+      camera's generator, which retried forever and never yielded — measured 446 reopen attempts,
+      zero frames, no ticks. Split into `Camera.next_frame()` (one attempt, one answer) and
+      `Runner.pump()` (a frame is optional, a tick is not). Verified on the real machine with
+      `camera.device = /dev/video99`: the loop ran its full 30 s, reopened every 2.01 s, declared
+      the camera gone and raised one `camera_gone` tamper event with zero frames.
+- [x] **R2** `enforce_cap` was quadratic — 1644 ms → 9.7 ms on 1137 drops, same outcome.
+- [x] **R3** Draining ran every tick; now on a 1 s timer, with tamper draining immediately.
+- [x] **R4** Frames, manifests, state files and the MEGA copy are written atomically.
+- [x] **R5** Vanished files no longer raise out of housekeeping.
+- [x] **R6** Dead `Runner.run()` deleted.
+- [x] **R7** `runner.py` (784) split into `runner.py` (395) + `lifecycle.py` + `modes.py`.
+- [x] **R8** Stale "every 2 minutes" comments; the schedule has been `* * * * *` since the first
+      live run. Sanitisation leak found alongside: the Pi's real username was in four files.
+- [x] **R9** Declined with a measurement: `read_mode` costs 0.017 ms and runs once per sound
+      decision. The expensive poll was `loginctl` at 1.88 ms **per tick** — now 1 s.
+- [x] **R10** `guard report` streams the log: peak RSS 100 MB → 16.6 MB on a 33 MB file.
+- [x] **R11** `_power_grab` annotated.
+
+Found while fixing, not in the review:
+
+- [x] "Evidence first, noise second" (spec 3.5) had never run: `set_ack_waiter` was called only by
+      a test, so every manifest in the field says `sound_evidence_confirmed: false`. Wired, with
+      two tests — one for the ordering, one for the cap on the wait.
+- [x] `sound_latency_ms` was a manifest field nobody filled.
+- [x] A dead camera logged one line per retry: 28 MB in two seconds on a stub.
+- [x] The unified loop slept 250 ms on frames that had already arrived — 7.3 fps became 3.4 fps.
+      Caught by measuring the live rate, not by the suite. Now 6.9 fps.

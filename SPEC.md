@@ -571,13 +571,17 @@ camtrap/
 ├── src/camtrap/
 │   ├── cli.py            command parsing
 │   ├── config.py         defaults plus ~/.config/camtrap/config.toml
-│   ├── camera.py         V4L2 capture, retry on USB drop
+│   ├── camera.py         V4L2 capture, one attempt per call, paced reopens
 │   ├── detector.py       MOG2, mask, lighting-change suppression
 │   ├── tamper.py         power, lid, case movement, ALS arbiter
 │   ├── player.py         sink selection, volume, cooldown, limits
 │   ├── event.py          event slicing, pre-buffer, throttling, manifest
 │   ├── spool.py          queue, priorities, cap, retention
+│   ├── atomic.py         write whole or not at all — nothing readable half-finished
 │   ├── uploader.py       ssh transport plus a fake sink for tests
+│   ├── runner.py         the loop: a frame is optional, a tick is not
+│   ├── lifecycle.py      signals, hardening, the last word to the receiver
+│   ├── modes.py          preflight, watch, drill, sound check
 │   ├── heartbeat.py
 │   └── selftest.py
 ├── assets/voice/         warn-<lang>.txt — the warning text per language, checked by a speaker
