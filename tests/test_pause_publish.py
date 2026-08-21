@@ -41,6 +41,7 @@ def test_a_finished_run_tells_the_receiver_its_final_mode(cfg):
     state.write_mode(cfg.root, state.MODE_PAUSED)
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"s")
+    cfg.shutter_path.write_bytes(b"c")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"w")
     cfg.camera.device = "/nonexistent/video9"  # ends the run right after arming

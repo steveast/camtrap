@@ -339,7 +339,11 @@ fires at every cleaner is a siren nobody believes by day three.
 
 **Stage 2 — the siren.** Fires on `tamper` only, never on `motion` or `light`.
 
-- **The sound is a two-tone police siren**, generated locally by `tools/make-siren.sh` through
+- **A camera-shutter click comes first.** 0.3 s, two transients 75 ms apart — mirror up, mirror
+  down — synthesised by `tools/make-shutter.sh`. It says "you have just been photographed" in no
+  language at all, and only then does the alarm start. Against staff who need an unremarkable exit,
+  knowing there is a picture may matter more than the noise.
+- **Then the siren**: a two-tone police siren, generated locally by `tools/make-siren.sh` through
   `ffmpeg` — nothing is downloaded. Two modes: `yelp`, a fast alternation of 700 and 1100 Hz
   (default, harder to ignore), and `wail`, a smooth 600↔1200 Hz sweep. Verified on the target
   machine: 6 s, ~20 KB, Vorbis 48 kHz. The file lives at
@@ -355,7 +359,10 @@ fires at every cleaner is a siren nobody believes by day three.
   profile that has a `Speaker` port, clears mute, and sets `SOUND_VOLUME_PCT` (100). Previous
   values go to the log.
 - **The player** is an external `pw-play` with a timeout; no audio bindings are added to the
-  dependencies. Everything the agent does with sound can be reproduced by hand from a shell —
+  dependencies. It takes **one file per invocation** — passing several silently plays only the
+  first, which is how the English half of the warning went unheard for days while the log happily
+  reported `files=2`. The player therefore keeps a queue and starts the next file when the current
+  one exits. Everything the agent does with sound can be reproduced by hand from a shell —
   that is what makes it fixable in a hotel room.
 - **Siren limits**: `SIREN_SEC = 6` per burst, `SOUND_COOLDOWN_SEC = 60`,
   `SOUND_MAX_PER_EVENT = 3`, `SOUND_MAX_PER_HOUR = 10`.

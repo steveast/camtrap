@@ -25,6 +25,7 @@ def runner():
 def sound_files(cfg):
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"siren")
+    cfg.shutter_path.write_bytes(b"click")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"warn")
     return cfg
@@ -130,7 +131,10 @@ def test_motion_does_not_lock_the_session(responder, runner):
 def test_tamper_plays_the_siren_and_locks_the_session(responder, runner):
     played = responder.on_tamper(["ac_offline"], now=0.0)
     assert played.stage is Stage.SIREN
-    assert "siren.ogg" in played.calls[0].path
+    # Shutter first — "you have just been photographed" — and then the alarm.
+    assert [call.lang for call in played.calls] == ["shutter", ""]
+    assert "shutter.ogg" in played.calls[0].path
+    assert "siren.ogg" in played.calls[1].path
     assert runner.ran("lock-session")
 
 
@@ -211,7 +215,8 @@ def test_gate_can_allow_the_siren_while_holding_the_warning(responder):
 
 def test_missing_sound_file_reports_instead_of_going_quiet(cfg, runner):
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
-    cfg.siren_path.write_bytes(b"siren")  # warn files deliberately absent
+    cfg.siren_path.write_bytes(b"siren")
+    cfg.shutter_path.write_bytes(b"click")  # warn files deliberately absent
     r = SoundResponder(cfg, runner=runner, spawn=_spawn_fake)
     result = r.on_motion(now=0.0)
     assert not result.played
@@ -276,3 +281,50 @@ def test_new_signals_cannot_machine_gun_the_siren(responder):
     result = responder.on_tamper(["ac_offline"], now=1.0)
     assert not result.played and result.reason == "retrigger_floor"
     assert responder.on_tamper(["ac_offline"], now=5.0).played
+
+
+# --- one file per pw-play invocation: a queue, not a playlist argument -------------------------
+
+
+def test_files_play_one_after_another(responder):
+    """pw-play takes ONE file; passing several silently played only the first, which is why the
+    English half of the warning never sounded."""
+    result = responder.on_motion(now=0.0)
+    assert [c.lang for c in result.calls] == ["vi", "en"]
+
+    first = responder.spawned[-1]
+    assert len([a for a in first.argv if a.endswith(".ogg")]) == 1, "one file per invocation"
+    assert "warn-vi.ogg" in " ".join(first.argv)
+
+    # when the first finishes, the hold tick starts the second
+    first.advance(31.0)  # past warn_timeout_sec, so poll() reports it done
+    assert responder.hold_tick(now=1.0)
+    second = responder.spawned[-1]
+    assert second is not first
+    assert "warn-en.ogg" in " ".join(second.argv)
+
+
+def test_the_siren_follows_the_shutter(responder):
+    responder.on_tamper(["ac_offline"], now=0.0)
+    first = responder.spawned[-1]
+    assert "shutter.ogg" in " ".join(first.argv)
+    first.advance(10.0)  # siren_sec is 6, so the click has long finished
+    responder.hold_tick(now=0.5)
+    assert "siren.ogg" in " ".join(responder.spawned[-1].argv)
+
+
+def test_a_siren_preempting_a_warning_drops_the_queued_languages(responder):
+    responder.on_motion(now=0.0)
+    responder.on_tamper(["lid_closed"], now=1.0)
+    # the queued English file must not surface after the siren
+    played = " ".join(responder.spawned[-1].argv)
+    assert "shutter.ogg" in played or "siren.ogg" in played
+    assert not any("warn-en" in " ".join(p.argv) for p in responder.spawned[-1:])
+
+
+def test_the_shutter_can_be_switched_off(sound_files, runner):
+    sound_files.sound.shutter_before_siren = False
+    r = SoundResponder(sound_files, runner=runner, spawn=_spawn_fake)
+    result = r.on_tamper(["ac_offline"], now=0.0)
+    assert [c.lang for c in result.calls] == [""]
+    assert "siren.ogg" in result.calls[0].path

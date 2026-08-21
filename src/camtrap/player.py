@@ -244,6 +244,10 @@ class SoundResponder:
         self._ack: AckWaiter | None = None
         self._proc: _Proc | None = None
         self._playing_stage: Stage | None = None
+        #: Files still to play. pw-play takes ONE file per invocation — passing several silently
+        #: plays only the first, which is why the English half of the warning never sounded. So the
+        #: player keeps a queue and starts the next file when the current one exits.
+        self._queue: list[PlayCall] = []
         self._hold_last = 0.0
         self._last_warn = float("-inf")
         self._last_siren = float("-inf")
@@ -352,7 +356,14 @@ class SoundResponder:
     def _files(self, stage: Stage) -> list[PlayCall] | None:
         if stage is Stage.SIREN:
             path = self.cfg.siren_path
-            return [PlayCall(str(path))] if path.exists() else None
+            if not path.exists():
+                return None
+            calls: list[PlayCall] = []
+            if self.cfg.sound.shutter_before_siren and self.cfg.shutter_path.exists():
+                # Shutter first: "photographed", then the alarm.
+                calls.append(PlayCall(str(self.cfg.shutter_path), lang="shutter"))
+            calls.append(PlayCall(str(path)))
+            return calls
         calls: list[PlayCall] = []
         for lang in self.cfg.sound.warn_langs:
             path = self.cfg.warn_path(lang)
@@ -362,6 +373,25 @@ class SoundResponder:
         return calls or None
 
     def _play(self, calls: list[PlayCall], *, stage: Stage, now: float) -> None:
+        """Queue the files and start the first one.
+
+        pw-play takes ONE file per invocation. Passing several silently played only the first,
+        which is why the English half of the warning never sounded even though the log said two
+        files. So the player holds a queue and hold_tick starts the next file when the current
+        process exits.
+        """
+        self._queue = list(calls)
+        self._playing_stage = stage
+        self._hold_last = now
+        self._start_next(stage)
+
+    def _start_next(self, stage: Stage) -> bool:
+        """Start the next queued file. Returns False when the queue is empty."""
+        if not self._queue:
+            self._proc = None
+            self._playing_stage = None
+            return False
+        call = self._queue.pop(0)
         # The duration doubles as a kill timeout: a hung pw-play must not hold the stage.
         duration = (
             self.cfg.sound.siren_sec if stage is Stage.SIREN else self.cfg.sound.warn_timeout_sec
@@ -370,12 +400,13 @@ class SoundResponder:
         sink = self.audio.sink
         if sink:
             argv += ["--target", sink]
-        argv += [call.path for call in calls]
+        argv.append(call.path)
         self._proc = self._spawn(argv, duration)
         self._playing_stage = stage
-        self._hold_last = now
+        return True
 
     def _stop_current(self, *, reason: str) -> None:
+        self._queue = []
         if self._proc is not None and self._proc.poll() is None:
             self._proc.kill()
             stage = (self._playing_stage or Stage.WARNING).value
@@ -388,6 +419,11 @@ class SoundResponder:
         if self._proc is None or self._playing_stage is None:
             return False
         if self._proc.poll() is not None:
+            # Current file finished: move to the next one, if any.
+            stage = self._playing_stage
+            if stage is not None and self._start_next(stage):
+                self._hold_last = now
+                return True
             self._proc = None
             self._playing_stage = None
             return False

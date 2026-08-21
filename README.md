@@ -7,9 +7,10 @@ A camera trap running on a laptop, for a hotel room you have to leave your thing
 - **Someone is in the room** → a spoken warning, in the local language and then English:
   *"Attention. This laptop is protected by an alarm and a camera."* Most visits end there, without
   an incident.
-- **The laptop is picked up** — cable pulled, lid closed, case lifted → a police siren at full
-  volume, which cannot be silenced from the keyboard. Carrying a screaming laptop out of a hotel
-  room is not something people go through with.
+- **The laptop is picked up** — cable pulled, lid closed, case lifted, power button pressed → a
+  camera-shutter click, and then a police siren at full volume which cannot be silenced from the
+  keyboard. The click needs no language: it says a picture was just taken. Carrying a screaming
+  laptop out of a hotel room is not something people go through with.
 
 The camera side documents what happened; sound is what changes what happens. Keeping the siren for
 the case that deserves it is what keeps the siren believable.

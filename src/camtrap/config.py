@@ -144,6 +144,10 @@ class SoundConfig:
     siren_file: str = ""  # empty => data_dir()/sounds/siren.ogg
     siren_sec: float = 6.0
     siren_mode: str = "yelp"
+    # A camera-shutter click before the siren. Recognisable in any country without a word of
+    # language: it says "you have just been photographed", and only then does the alarm start.
+    shutter_before_siren: bool = True
+    shutter_file: str = ""  # empty => data_dir()/sounds/shutter.ogg
     volume_pct: int = 100
     cooldown_sec: float = 60.0
     # The cooldown is per signal, not global: closing the lid and then pulling the cable are two
@@ -270,6 +274,12 @@ class Config:
     @property
     def sounds_dir(self) -> Path:
         return Path(self.sound.warn_dir) if self.sound.warn_dir else self.root / "sounds"
+
+    @property
+    def shutter_path(self) -> Path:
+        if self.sound.shutter_file:
+            return Path(self.sound.shutter_file)
+        return self.sounds_dir / "shutter.ogg"
 
     @property
     def siren_path(self) -> Path:

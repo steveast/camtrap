@@ -56,6 +56,7 @@ def test_sound_ok_turns_true_once_files_exist(cfg, parts):
     monitor, spool, _arming = parts
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"s")
+    cfg.shutter_path.write_bytes(b"c")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"w")
     fields = _fields(build(cfg, started=0.0, now=1.0, monitor=monitor, spool=spool).render())
@@ -67,6 +68,7 @@ def test_a_missing_language_keeps_sound_ok_false(cfg, parts):
     monitor, spool, _arming = parts
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"s")
+    cfg.shutter_path.write_bytes(b"c")
     cfg.warn_path("vi").write_bytes(b"w")  # 'en' deliberately absent
     fields = _fields(build(cfg, started=0.0, now=1.0, monitor=monitor, spool=spool).render())
     assert fields["sound_ok"] == "0"

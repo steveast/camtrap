@@ -23,6 +23,10 @@ class Spawned(list):
     def played(self, needle):
         return any(needle in " ".join(p.argv) for p in self)
 
+    def played_siren(self):
+        """The siren stage started. Its first file is the shutter click, by design."""
+        return self.played("shutter.ogg") or self.played("siren.ogg")
+
 
 @pytest.fixture
 def wired(cfg, sysfs):
@@ -32,6 +36,7 @@ def wired(cfg, sysfs):
     cfg.tamper.debounce_sec = 1.0
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"siren")
+    cfg.shutter_path.write_bytes(b"click")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"warn")
 
@@ -72,7 +77,7 @@ def test_armed_cable_pull_sounds_the_siren(wired):
     runner.step(72.0)
     runner.step(73.5)
     assert runner.stats.sirens == 1
-    assert runner.spawned.played("siren.ogg")
+    assert runner.spawned.played_siren()
     assert cmds.ran("lock-session")
 
 
@@ -85,7 +90,7 @@ def test_unlocked_session_stays_silent_on_a_cable_pull(wired):
     runner.step(2.5)
     assert runner.stats.tamper_events == 1  # the signal is still recorded
     assert runner.stats.sirens == 0  # but nothing is played
-    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played_siren()
 
 
 def test_motion_plays_the_warning_not_the_siren(wired):
@@ -95,8 +100,10 @@ def test_motion_plays_the_warning_not_the_siren(wired):
     runner.motion(now=70.0)
     assert runner.stats.warnings == 1
     assert runner.spawned.played("warn-vi.ogg")
-    assert runner.spawned.played("warn-en.ogg")
-    assert not runner.spawned.played("siren.ogg")
+    # English is queued behind Vietnamese, not passed in the same invocation: pw-play plays one
+    # file at a time. The hand-off is covered in test_player.
+    assert [c.lang for c in runner.responder._queue] == ["en"]
+    assert not runner.spawned.played_siren()
     assert cmds.count("lock-session") <= 1  # from arming, not from the warning
 
 
@@ -135,7 +142,7 @@ def test_stats_and_gate_reflect_pause(wired):
     runner.step(71.0)
     runner.step(72.5)
     assert runner.stats.sirens == 0
-    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played_siren()
 
 
 def test_gate_is_wired_from_arming_to_responder(wired):
@@ -177,7 +184,7 @@ def test_motion_in_frame_plays_the_warning_only(framed):
         runner.on_frame(frame, now=70.0 + index * 0.2)
     assert runner.stats.warnings >= 1
     assert runner.spawned.played("warn-vi.ogg")
-    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played_siren()
     # The session is locked once, by arming. A warning must not lock anything by itself:
     # stage 1 is a notice, not a confrontation.
     assert cmds.count("lock-session") <= 1
@@ -208,7 +215,7 @@ def test_a_lifted_case_sounds_the_siren_from_the_camera_path(framed):
     for index in range(30):
         runner.on_frame(texture, now=100.0 + index * 0.2)
     runner.on_frame(np.roll(texture, 60, axis=1), now=110.0)
-    assert runner.spawned.played("siren.ogg")
+    assert runner.spawned.played_siren()
     assert "scene_shift" in runner.stats.signals
     assert cmds.ran("lock-session")
 
@@ -217,7 +224,7 @@ def test_a_light_switch_makes_no_sound_by_default(framed):
     runner, blank, _cmds = framed
     runner.on_frame(blank(215), now=100.0)
     assert runner.stats.light_events == 1
-    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played_siren()
     assert not runner.spawned.played("warn-vi.ogg")
 
 
@@ -226,7 +233,7 @@ def test_light_can_be_configured_to_warn(framed):
     runner.cfg.sound.warn_on_light = True
     runner.on_frame(blank(215), now=100.0)
     assert runner.spawned.played("warn-vi.ogg")
-    assert not runner.spawned.played("siren.ogg")
+    assert not runner.spawned.played_siren()
 
 
 def test_warning_is_requested_once_per_event_not_once_per_frame(framed):
@@ -440,7 +447,7 @@ def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
     runner.step(71.0)
 
     assert "power_button_pressed" in runner.stats.signals
-    assert runner.spawned.played("siren.ogg"), "a press while armed must be audible"
+    assert runner.spawned.played_siren(), "a press while armed must be audible"
     assert cmds.ran("lock-session")
 
 

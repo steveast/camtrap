@@ -17,6 +17,7 @@ def test_missing_sound_files_fail_with_a_command_to_fix_them(cfg):
 def test_present_sound_files_pass(cfg):
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"s")
+    cfg.shutter_path.write_bytes(b"c")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"w")
     files = next(c for c in selftest.check_sounds(cfg) if c.name == "sound:files")

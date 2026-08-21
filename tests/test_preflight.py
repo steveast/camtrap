@@ -9,6 +9,7 @@ from camtrap import runner
 def ready_cfg(cfg):
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"siren")
+    cfg.shutter_path.write_bytes(b"click")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"warn")
     cfg.camera.device = "/dev/null"  # exists, so the device check gets past its first gate
@@ -97,6 +98,7 @@ def test_a_standalone_check_puts_the_audio_profile_back(cfg, monkeypatch):
     monkeypatch.setattr(AudioPath, "restore_profile", lambda self: restored.append(1) or True)
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"siren")
+    cfg.shutter_path.write_bytes(b"click")
 
     runner.audio_probe(cfg, restore=True)
     assert restored, "a check restores"
@@ -131,6 +133,7 @@ def test_watch_arms_itself_when_paused_and_restores_after(cfg):
     state.write_mode(cfg.root, state.MODE_PAUSED)
     cfg.sounds_dir.mkdir(parents=True, exist_ok=True)
     cfg.siren_path.write_bytes(b"s")
+    cfg.shutter_path.write_bytes(b"c")
     for lang in cfg.sound.warn_langs:
         cfg.warn_path(lang).write_bytes(b"w")
     cfg.camera.device = "/nonexistent/video9"  # bail out right after arming
