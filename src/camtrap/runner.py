@@ -308,12 +308,13 @@ class Runner:
             iterations += 1
             if max_iterations is not None and iterations >= max_iterations:
                 return
-            # Idle: pace by the hold tick when frames are flowing, by the reopen delay when not.
-            self.sleep(
-                self.cfg.sound.hold_poll_ms / 1000.0
-                if frame is not None
-                else self.cfg.camera.reopen_delay_sec
-            )
+            if frame is None:
+                # No frame to wait on, so pace by the hold tick: the audio path is re-asserted
+                # and sysfs is polled at that rate, and a camera with nothing to give must not
+                # turn into a spin. When frames ARE flowing the blocking read is the pacing, and
+                # sleeping on top of it would halve the frame rate — measured: 7.3 fps became
+                # 3.4 fps, on the one thing the owner asked to make faster.
+                self.sleep(self.cfg.sound.hold_poll_ms / 1000.0)
 
     def _note_camera_state(self, camera: Camera, now: float) -> None:
         """Raise a tamper signal the first time the camera is declared gone.

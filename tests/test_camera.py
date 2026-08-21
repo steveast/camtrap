@@ -24,6 +24,10 @@ class FakeClock:
     def spend(self, seconds):
         self.now += seconds
 
+    #: Sleeping spends time too. A fake sleep that leaves the clock still is the test lying, and
+    #: it hides real waits — reopen pacing is measured against this clock.
+    sleep = spend
+
 
 class FakeCapture:
     """Mirrors cv2.VideoCapture: grab() pulls a frame, read() also decodes it."""
@@ -142,7 +146,7 @@ def test_a_dropped_device_is_reopened(cfg, frames):
         return capture
 
     cfg.camera.target_fps = 30  # take everything, so failures show up immediately
-    camera = Camera(cfg, opener=opener, clock=clock, sleep=lambda _s: None)
+    camera = Camera(cfg, opener=opener, clock=clock, sleep=clock.sleep)
     produced = list(camera.frames(limit=4))
     assert len(produced) == 4
     assert camera.status.reopens >= 1
@@ -157,7 +161,7 @@ def test_giving_up_marks_the_camera_gone(cfg, frames):
         cfg,
         opener=lambda device: FakeCapture(clock, frames, fail_after=0),
         clock=clock,
-        sleep=lambda _s: None,
+        sleep=clock.sleep,
     )
     assert list(camera.frames(limit=2)) == []
     assert camera.status.gone

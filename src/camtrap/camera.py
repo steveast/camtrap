@@ -49,6 +49,7 @@ class Camera:
         self.status = CameraStatus()
         self._analysed: deque[float] = deque(maxlen=40)
         self._failures = 0
+        self._next_attempt = float("-inf")
         self._raw_interval: float | None = None
         self._last_raw: float | None = None
         self._stride = max(1, cfg.camera.capture_fps // max(1, cfg.camera.target_fps))
@@ -148,9 +149,14 @@ class Camera:
         inside that loop. A stub device measured 446 reopen attempts and zero frames yielded.
         Losing the eyes must not cost the ears.
         """
-        if self._cap is None and not self.open():
-            self._note_failure()
-            return None
+        if self._cap is None:
+            # Reopening a V4L2 device is expensive, so it gets its own pace. The loop keeps
+            # ticking at its own rate meanwhile — that is the whole point of answering None.
+            if self.clock() < self._next_attempt:
+                return None
+            if not self.open():
+                self._note_failure()
+                return None
         skip = self._stride_now() - 1
         frame = self.read() if skip <= 0 or self._skip(skip) else None
         if frame is None:
@@ -167,6 +173,7 @@ class Camera:
     def _note_failure(self) -> None:
         """Release, count, and decide whether the camera counts as gone — but keep trying."""
         self.release()
+        self._next_attempt = self.clock() + self.cfg.camera.reopen_delay_sec
         self._failures += 1
         self.status.reopens += 1
         attempts = self.cfg.camera.max_reopen_attempts

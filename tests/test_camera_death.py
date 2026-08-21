@@ -38,6 +38,19 @@ class DeadCapture:
         self.released = True
 
 
+class Clock:
+    """A clock the test drives. Sleeping moves it, because reopen pacing is measured in time."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 class Spawned(list):
     def __call__(self, argv, duration):
         proc = FakeProcess(argv=argv, duration=duration, started=0.0)
@@ -63,17 +76,10 @@ def wired_dead(cfg, sysfs):
     cfg.arming.exit_delay_sec = 0.0
     cfg.detector.warmup_sec = 0.0
 
-    class Clock:
-        def __init__(self):
-            self.now = 0.0
-
-        def __call__(self):
-            return self.now
-
     clock = Clock()
     spawned = Spawned()
     cmds = FakeRunner()
-    camera = Camera(cfg, opener=lambda device: DeadCapture(), clock=clock, sleep=lambda s: None)
+    camera = Camera(cfg, opener=lambda device: DeadCapture(), clock=clock, sleep=clock.advance)
     runner = Runner(
         cfg,
         monitor=TamperMonitor(cfg),
@@ -88,15 +94,18 @@ def wired_dead(cfg, sysfs):
 
 def test_next_frame_returns_none_instead_of_blocking(cfg):
     """One attempt, one answer. No internal loop that never comes back."""
-    camera = Camera(cfg, opener=lambda device: DeadCapture(), sleep=lambda s: None)
+    clock = Clock()
+    camera = Camera(cfg, opener=lambda device: DeadCapture(), clock=clock, sleep=clock.advance)
     assert camera.next_frame() is None
     assert camera.next_frame() is None  # and it keeps being answerable
 
 
 def test_a_dead_camera_is_eventually_declared_gone(cfg):
     cfg.camera.max_reopen_attempts = 3
-    camera = Camera(cfg, opener=lambda device: DeadCapture(), sleep=lambda s: None)
+    clock = Clock()
+    camera = Camera(cfg, opener=lambda device: DeadCapture(), clock=clock, sleep=clock.advance)
     for _ in range(5):
+        clock.advance(cfg.camera.reopen_delay_sec)
         camera.next_frame()
     assert camera.status.gone, "after the configured attempts it must admit the camera is gone"
 
@@ -116,11 +125,14 @@ def test_reopening_continues_even_after_gone(cfg):
         def grab(self):
             return state["alive"]
 
-    camera = Camera(cfg, opener=lambda device: Flaky(), sleep=lambda s: None)
+    clock = Clock()
+    camera = Camera(cfg, opener=lambda device: Flaky(), clock=clock, sleep=clock.advance)
     for _ in range(4):
+        clock.advance(cfg.camera.reopen_delay_sec)  # the loop waited out the reopen pace
         camera.next_frame()
     assert camera.status.gone
     state["alive"] = True
+    clock.advance(cfg.camera.reopen_delay_sec)  # noticed one reopen pace later, not instantly
     assert camera.next_frame() is not None, "it must recover when the device comes back"
     assert not camera.status.gone, "and stop claiming to be gone"
 
