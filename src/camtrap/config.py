@@ -239,6 +239,9 @@ class Config:
     upload: UploadConfig = field(default_factory=UploadConfig)
     state_dir: str = ""  # empty => data_dir()
     log_ticks: bool = False
+    #: Where the agent writes its own journal. Empty means stdout only. Set by `guard` so that
+    #: closing the terminal cannot break the agent's logging — or the agent.
+    log_file: str = ""
 
     # --- derived paths -------------------------------------------------------
 

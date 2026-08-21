@@ -7,6 +7,7 @@ warning, tampering produces the siren.
 
 from __future__ import annotations
 
+import atexit
 import signal
 import subprocess
 import time
@@ -247,9 +248,27 @@ class Runner:
         return self.stats
 
 
+def harden_process(cfg: Config) -> None:
+    """Make the agent independent of the terminal that started it.
+
+    A run was killed at 22:31 when its terminal closed, and because the process died on SIGHUP the
+    receiver never learned it had stopped: the last heartbeat still said `armed`, which reads as a
+    stolen laptop, and the poller repeated that alert for eight hours. A camera trap must outlive
+    the shell that launched it.
+    """
+    for signal_name in ("SIGHUP", "SIGPIPE"):
+        handler = getattr(signal, signal_name, None)
+        if handler is not None:
+            signal.signal(handler, signal.SIG_IGN)
+    log.set_file(cfg.log_file or None)
+    # Whatever happens next, tell the receiver how this ended.
+    atexit.register(lambda: publish_heartbeat(cfg))
+
+
 def run_forever(cfg: Config) -> int:
     """Capture loop plus tamper polling. The camera drives the cadence; sysfs is polled between
     frames, so a cable pull is noticed even while the detector is busy."""
+    harden_process(cfg)
     with Inhibitor() as inhibitor:
         if not inhibitor.active:
             log.emit("warn", reason="no sleep inhibitor: a closed lid may suspend the machine")

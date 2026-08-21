@@ -350,6 +350,9 @@ def cmd_resume(cfg: config_mod.Config, args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camtrap", description="laptop camera trap")
     parser.add_argument("--config", type=Path, default=None, help="path to config.toml")
+    parser.add_argument(
+        "--log-file", default=None, help="append the journal here as well as to stdout"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     status = sub.add_parser("status", help="local state: mode, spool, sounds, languages")
@@ -435,6 +438,9 @@ def main(argv: list[str] | None = None, *, cfg: config_mod.Config | None = None)
     args = parser.parse_args(argv)
     if cfg is None:
         cfg = config_mod.load(args.config)
+    if getattr(args, "log_file", None):
+        cfg.log_file = args.log_file
+        log.set_file(cfg.log_file)
     try:
         return int(args.func(cfg, args))
     except KeyboardInterrupt:

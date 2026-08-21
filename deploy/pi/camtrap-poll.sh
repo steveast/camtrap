@@ -18,6 +18,11 @@ CONF="${CAMTRAP_POLL_ENV:-/etc/camtrap-poll.env}"
 STATE_DIR="${CAMTRAP_STATE_DIR:-/var/lib/camtrap-poll}"
 HB_STALE_SEC="${HB_STALE_SEC:-300}"
 REPEAT_SEC="${REPEAT_SEC:-1800}"
+# Reminders back off: 30 min, 1 h, 2 h, 4 h, then every REPEAT_MAX_SEC. Eighteen identical alerts
+# through one night taught nobody anything the second one had not already said, and an alert that
+# repeats past usefulness is an alert that gets muted — the exact failure this project cannot
+# afford. Recovery still reports immediately.
+REPEAT_MAX_SEC="${REPEAT_MAX_SEC:-21600}"
 TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
 # Unlimited by default: the owner's call — more information beats fewer notifications, and a
 # missed event cannot be recovered from a summary. Set MOTION_ALERTS_PER_HOUR to a positive
@@ -69,13 +74,31 @@ note_failure() { # check, message
     message=$2
     marker="$STATE_DIR/fail-$check"
     now=$(date -u +%s)
+    repeats=0
+    wait_for="$REPEAT_SEC"
     if [ -f "$marker" ]; then
+        # marker: <first_seen> <last_sent> <repeats>
         last=$(cut -d' ' -f2 "$marker" 2>/dev/null || echo 0)
-        [ $((now - last)) -ge "$REPEAT_SEC" ] || return 0
+        repeats=$(cut -d' ' -f3 "$marker" 2>/dev/null || echo 0)
+        [ -n "$repeats" ] || repeats=0
+        # Double the interval per reminder, capped.
+        wait_for=$REPEAT_SEC
+        i=0
+        while [ "$i" -lt "$repeats" ]; do
+            wait_for=$((wait_for * 2))
+            [ "$wait_for" -ge "$REPEAT_MAX_SEC" ] && wait_for=$REPEAT_MAX_SEC && break
+            i=$((i + 1))
+        done
+        [ $((now - last)) -ge "$wait_for" ] || return 0
+        first=$(cut -d' ' -f1 "$marker" 2>/dev/null || echo "$now")
+        hours=$(( (now - first) / 3600 ))
+        [ "$hours" -gt 0 ] && message="$message
+(unresolved for ${hours}h; next reminder in $((wait_for * 2 / 3600))h or on recovery)"
     fi
     if send_message "$message"; then
-        printf '%s %s\n' "$now" "$now" > "$marker"
-        log "alert check=$check state=down"
+        first=${first:-$now}
+        printf '%s %s %s\n' "$first" "$now" "$((repeats + 1))" > "$marker"
+        log "alert check=$check state=down repeats=$((repeats + 1)) next_in=$((wait_for * 2))"
     else
         log "alert_failed check=$check"
     fi

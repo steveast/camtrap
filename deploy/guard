@@ -35,8 +35,12 @@ run_logged() {
         mv "$LOG" "$LOG.1"
     fi
     printf '\n=== %s : camtrap %s ===\n' "$(date -Is)" "$*" >> "$LOG"
-    PYTHONPATH="$REPO/src" "$PY" -m camtrap "$@" 2>&1 | tee -a "$LOG"
-    return "${PIPESTATUS[0]}"
+    # --log-file: the agent writes its own journal, so closing this terminal breaks neither the
+    # record nor the agent. tee is only for watching it live.
+    PYTHONPATH="$REPO/src" "$PY" -m camtrap --log-file "$LOG" "$@" 2>&1 | tee -a "$LOG.tty"
+    rc="${PIPESTATUS[0]}"
+    rm -f "$LOG.tty"
+    return "$rc"
 }
 
 case "${1:-arm}" in
@@ -123,7 +127,7 @@ guard — laptop camera trap
 
   guard              preflight, then arm when the room goes quiet, then run
   guard --still 15   arm after 15 s of quiet instead of the default 30
-  guard off          stop and mark the offline as expected
+  guard off          stop and mark the offline as expected (do this instead of closing the window)
   guard status       mode, arming state, spool, sound readiness
   guard check        preflight only: camera, sounds, speakers, receiver, no-sleep
   guard drill        rehearse cable/mute/lid at low volume, screen stays unlocked

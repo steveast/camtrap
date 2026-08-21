@@ -354,3 +354,46 @@ def test_a_capped_event_is_not_re_examined(rig):
     rig.run()
     marker = Path(rig.env["CAMTRAP_STATE_DIR"]) / "sent-evt_20260820180000Z"
     assert marker.exists(), "a suppressed event must still be marked seen"
+
+
+def test_reminders_back_off_instead_of_repeating_all_night(rig):
+    """Eighteen identical alerts through one night is how alerting gets muted."""
+    rig.env["REPEAT_SEC"] = "1"
+    rig.env["REPEAT_MAX_SEC"] = "8"
+    rig.set_state(mode="armed", sound_ok=1, hb_age=9000)
+
+    import time as _time
+
+    sent_at = []
+    for _ in range(6):
+        before = len([n for n in rig.sent() if n.startswith("message-")])
+        rig.run()
+        after = len([n for n in rig.sent() if n.startswith("message-")])
+        if after > before:
+            sent_at.append(_time.time())
+        _time.sleep(1.1)
+
+    # 1 s, then 2 s, then 4 s: six ticks a second apart cannot produce six alerts
+    assert 2 <= len(sent_at) <= 4, f"expected backoff, got {len(sent_at)} alerts"
+
+
+def test_a_long_running_failure_says_how_long(rig):
+    rig.env["REPEAT_SEC"] = "0"
+    rig.set_state(mode="armed", sound_ok=1, hb_age=9000)
+    rig.run()
+    marker = Path(rig.env["CAMTRAP_STATE_DIR"]) / "fail-hb"
+    first, last, repeats = marker.read_text().split()
+    marker.write_text(f"{int(first) - 7200} {last} {repeats}")
+    rig.run()
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    assert any("unresolved for 2h" in b for b in bodies), bodies
+
+
+def test_recovery_still_reports_immediately(rig):
+    rig.env["REPEAT_SEC"] = "0"
+    rig.set_state(mode="armed", sound_ok=1, hb_age=9000)
+    rig.run()
+    rig.set_state(mode="armed", sound_ok=1, hb_age=5)
+    rig.run()
+    bodies = [rig.body(n) for n in rig.sent() if n.startswith("message-")]
+    assert any("🟢" in b for b in bodies)
