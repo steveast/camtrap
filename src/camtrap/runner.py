@@ -248,6 +248,39 @@ class Runner:
         return self.stats
 
 
+def system_is_stopping() -> bool:
+    """True while systemd is shutting the machine down.
+
+    The owner powers the laptop off every day; that is not a theft. A thief cannot reach a clean
+    shutdown either — the session is locked on tamper, and pulling the power or holding the button
+    kills the process without a signal, so there is no shutdown to observe.
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-system-running"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.stdout.strip() in ("stopping", "offline")
+
+
+def _final_word(cfg: Config) -> None:
+    """Tell the receiver how this ended, and whether it ended on purpose."""
+    from .state import MODE_PAUSED, read_mode, write_mode
+
+    if system_is_stopping() and not read_mode(cfg.root).paused:
+        # A deliberate shutdown is an expected offline. Without this the last heartbeat says
+        # `armed`, the agent goes quiet, and the poller reports a stolen laptop every single
+        # evening — which is how alerting gets muted.
+        write_mode(cfg.root, MODE_PAUSED)
+        log.emit("shutdown", detail="system stopping; marking the offline expected")
+    publish_heartbeat(cfg)
+
+
 def harden_process(cfg: Config) -> None:
     """Make the agent independent of the terminal that started it.
 
@@ -262,7 +295,7 @@ def harden_process(cfg: Config) -> None:
             signal.signal(handler, signal.SIG_IGN)
     log.set_file(cfg.log_file or None)
     # Whatever happens next, tell the receiver how this ended.
-    atexit.register(lambda: publish_heartbeat(cfg))
+    atexit.register(lambda: _final_word(cfg))
 
 
 def run_forever(cfg: Config) -> int:

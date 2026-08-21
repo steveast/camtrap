@@ -58,6 +58,15 @@ The alarm is live once the screen is locked and the delay has passed — `camtra
 otherwise hear the spoken warning every time they come in. That is correct behaviour, not a fault,
 but it is a conversation with the front desk you can simply avoid.
 
+## Powering the machine off
+
+Just switch it off. The agent notices that systemd is stopping, marks the offline as expected and
+sends a final heartbeat, so no "agent went silent" alert follows. `guard off` does the same thing
+explicitly if you want the trap stopped without shutting down.
+
+What still alerts — deliberately — is the machine dying *without* a shutdown: battery pulled,
+power button held, or the laptop carried out of the room. That is the case worth being woken for.
+
 ## Taking the laptop yourself
 
 Unlock the screen. That disarms the alarm and opens a grace window

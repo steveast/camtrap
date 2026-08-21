@@ -81,3 +81,56 @@ def test_cli_accepts_a_log_file(cfg, tmp_path):
     log.set_file(None)
     assert rc == 0
     assert Path(target).exists()
+
+
+# --- powering the laptop off is not a theft ----------------------------------------------------
+
+
+def test_a_deliberate_shutdown_marks_the_offline_expected(cfg, monkeypatch):
+    """The owner powers the machine off daily. Alerting on that trains them to ignore alerts."""
+    from camtrap import state
+
+    monkeypatch.setattr(runner, "system_is_stopping", lambda: True)
+    published = []
+    monkeypatch.setattr(runner, "publish_heartbeat", lambda c: published.append(c) or True)
+
+    state.write_mode(cfg.root, state.MODE_ARMED)
+    runner._final_word(cfg)
+
+    assert state.read_mode(cfg.root).paused, "a shutdown is an expected offline"
+    assert published, "and the receiver has to be told before we go"
+
+
+def test_a_crash_does_not_mark_the_offline_expected(cfg, monkeypatch):
+    """If the machine is not shutting down, silence stays suspicious — that is the whole point."""
+    from camtrap import state
+
+    monkeypatch.setattr(runner, "system_is_stopping", lambda: False)
+    monkeypatch.setattr(runner, "publish_heartbeat", lambda c: True)
+
+    state.write_mode(cfg.root, state.MODE_ARMED)
+    runner._final_word(cfg)
+
+    assert not state.read_mode(cfg.root).paused, "an unexplained stop must stay an alert"
+
+
+def test_system_is_stopping_reads_systemd(monkeypatch):
+    class Result:
+        stdout = "stopping\n"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Result())
+    assert runner.system_is_stopping() is True
+
+    class Running:
+        stdout = "running\n"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Running())
+    assert runner.system_is_stopping() is False
+
+
+def test_a_missing_systemctl_is_not_a_shutdown(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("no systemctl")
+
+    monkeypatch.setattr(runner.subprocess, "run", boom)
+    assert runner.system_is_stopping() is False

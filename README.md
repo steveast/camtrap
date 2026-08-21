@@ -50,6 +50,9 @@ knowing it is broken. Then it waits for the room to go quiet rather than countin
 delay: take what you need, leave, and it arms behind you. Coming back, unlock the screen — that
 disarms it and opens a grace window, so picking the laptop up does not set off a siren.
 
+**Where everything lives** — which machine runs what, every path, and the daily cycle:
+[docs/deployment.md](docs/deployment.md).
+
 ## How it fits together
 
 ```
