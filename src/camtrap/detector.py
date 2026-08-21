@@ -12,6 +12,7 @@ as movement too, because light does not smear.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
@@ -57,7 +58,7 @@ class NoiseStats:
 
 
 class Detector:
-    """Stateful: keeps the background model, the streak counter and the previous grey frame."""
+    """Stateful: keeps the background model, the confirmation window and the previous grey frame."""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -66,7 +67,9 @@ class Detector:
             varThreshold=cfg.detector.mog2_var_threshold,
             detectShadows=False,
         )
-        self._streak = 0
+        #: Whether each of the last motion_window_frames frames was above the area threshold.
+        #: A window rather than a run, because a person's mask flickers and a run loses the spike.
+        self._recent: deque[bool] = deque(maxlen=max(1, cfg.detector.motion_window_frames))
         self._started: float | None = None
         self._mask: np.ndarray | None = None
         self._prev_grey: np.ndarray | None = None
@@ -129,11 +132,11 @@ class Detector:
         self._seen += 1
 
         if self._seen <= self.cfg.detector.min_model_frames:
-            self._streak = 0
+            self._recent.clear()
             return Detection(EventKind.NONE, changed_pct=changed_pct, detail="model_priming")
 
         if self.warming_up(now=now):
-            self._streak = 0
+            self._recent.clear()
             return Detection(EventKind.NONE, changed_pct=changed_pct, detail="warmup")
 
         if changed_pct >= self.cfg.detector.shift_check_pct:
@@ -145,19 +148,22 @@ class Detector:
                 changed_pct >= self.cfg.detector.global_change_pct
             ):
                 self._global_active = True
-                self._streak = 0
+                self._recent.clear()
                 return verdict
             # A large but geometry-preserving change below the light threshold: treat it as
             # ordinary motion (someone close to the lens) rather than swallowing it.
 
         self._global_active = False
 
-        if changed_pct >= self.cfg.detector.min_area_pct:
-            self._streak += 1
-        else:
-            self._streak = 0
+        instant = self.cfg.detector.instant_area_pct
+        if instant and changed_pct >= instant:
+            # No curtain has ever reached this here. Confirming it would only cost time.
+            self._recent.clear()
+            return Detection(EventKind.MOTION, changed_pct=changed_pct, detail="instant")
 
-        if self._streak >= self.cfg.detector.min_motion_frames:
+        self._recent.append(changed_pct >= self.cfg.detector.min_area_pct)
+        if sum(self._recent) >= self.cfg.detector.min_motion_frames:
+            self._recent.clear()
             return Detection(EventKind.MOTION, changed_pct=changed_pct)
         return Detection(EventKind.NONE, changed_pct=changed_pct)
 

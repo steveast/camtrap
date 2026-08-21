@@ -55,11 +55,25 @@ class DetectorConfig:
     warmup_sec: float = 20.0
     # Measured in the owner's room: a curtain moving in the wind changes 0.9-1.3 % of the frame,
     # a person entering changes 10-11 %. A 0.8 % threshold therefore fired on the curtain all
-    # afternoon and buried the person in the same event. Calibrate per room with `guard calibrate`.
+    # afternoon and buried the person in the same event.
+    #
+    # This is the number that limits sensitivity, and lowering it is NOT free: replaying 29 real
+    # captures, 3.0 % gave 1 false event out of 22 empty-room ones, 2.0 % gave 4. Lower it only
+    # once `guard mask` covers the curtain — masked pixels are excluded from the percentage, which
+    # is what lets the threshold drop without the curtain coming back. Calibrate per room with
+    # `guard calibrate`.
     min_area_pct: float = 3.0
-    # Two frames at the measured ~7 fps is under 300 ms of confirmation. Three cost half a second
-    # and lost people who only crossed the doorway.
+    #: One frame this loud is motion on its own, with no confirmation. Above every empty-room frame
+    #: in the recorded captures (the loudest curtain replayed at 5.6 %) and below every event with
+    #: a person in it (9.0 % and up), so waiting for a second frame only costs time. 0 disables it.
+    instant_area_pct: float = 7.0
+    # Confirmation is counted over a window, not as a run of consecutive frames. A person at 7 fps
+    # gives a spiky mask — real captures show 11.3 % followed immediately by 0.0 % as they pass
+    # behind furniture or stop — and a consecutive rule threw those away, then waited for the next
+    # burst. That wait was the reported delay. Two frames out of five is the same evidence without
+    # demanding they be adjacent.
     min_motion_frames: int = 2
+    motion_window_frames: int = 5
     global_change_pct: float = 70.0
     blur_kernel: int = 21
     analysis_width: int = 640

@@ -38,12 +38,35 @@ SEND_ORIGINAL="${SEND_ORIGINAL:-1}"
 SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
+# One connection, reused. Every `remote` call used to pay a full TCP and ssh handshake to a VPS
+# abroad: measured from the same home network, 2707 ms cold against 674 ms over an established
+# connection, and a tick makes several calls — which is why a tick took 8-10 s of the minute it
+# had. ControlPersist also keeps the master alive between cron ticks, so most ticks pay nothing.
+# Options given here come after $CAMTRAP_SSH, so anything already set there still wins.
+CTL_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+SSH_MUX="-o ControlMaster=auto -o ControlPath=$CTL_DIR/camtrap-poll-%C -o ControlPersist=90"
+[ "${SSH_MULTIPLEX:-1}" = "1" ] || SSH_MUX=""
+
+# Sub-minute cadence without a second scheduler. cron is the coarsest part of the whole chain:
+# it fires once a minute, so an event waits 0-60 s (mean 30) before anyone even looks. With
+# POLL_PASSES>1 the cron tick makes several passes inside its minute, and a crash still self-heals
+# on the next one. Each pass is a child, so a failure in one does not skip the rest.
+if [ "${POLL_PASSES:-1}" -gt 1 ] && [ -z "${CAMTRAP_POLL_CHILD:-}" ]; then
+    pass=0
+    while [ "$pass" -lt "${POLL_PASSES}" ]; do
+        CAMTRAP_POLL_CHILD=1 "$0" || true
+        pass=$((pass + 1))
+        [ "$pass" -lt "${POLL_PASSES}" ] && sleep "${POLL_INTERVAL_SEC:-15}"
+    done
+    exit 0
+fi
+
 mkdir -p "$STATE_DIR"
 
 log() { logger -t camtrap-poll "$*" 2>/dev/null || echo "camtrap-poll $*" >&2; }
 
 remote() { # shellcheck disable=SC2086
-    ${CAMTRAP_SSH} "$@"
+    ${CAMTRAP_SSH} ${SSH_MUX} "$@"
 }
 
 send_message() {
@@ -238,17 +261,28 @@ sound: $sound}$cut_short$urgent"
         continue
     fi
 
-    # The frame worth looking at, per the manifest; fall back to the first by number.
-    first="${key:-${event}_000.jpg}"
-    printf '%s\n' "$listing" | grep -q "^$first " || first="${event}_000.jpg"
+    # Frames of this event that have actually arrived, oldest first. `_000` is the OLDEST
+    # pre-buffer frame — by construction the room a few seconds before anything happened.
+    present=$(printf '%s\n' "$listing" | awk '{print $1}' | grep "^${event}_.*\.jpg$" | sort)
 
-    # Album: the key frame leads, the rest of the event follows in order.
-    album="$first"
+    # The frame worth looking at, per the manifest. The manifest sorts ahead of the frames it
+    # names, so it can arrive naming a frame that is still uploading; the old fallback then picked
+    # `_000` and the alert showed an empty room. Measured in production: two of four events sent
+    # that afternoon led with `_000`. Fall back to the NEWEST frame present instead — whatever is
+    # happening, it is happening in the latest frame, not in the pre-buffer.
+    lead="${key:-}"
+    if [ -z "$lead" ] || ! printf '%s\n' "$present" | grep -q "^$lead$"; then
+        lead=$(printf '%s\n' "$present" | tail -1)
+        [ -n "$lead" ] || lead="${event}_000.jpg"
+    fi
+
+    # Album: the key frame leads, then the newest frames. The pre-buffer proves the room was
+    # empty before, which is worth keeping on the receiver but is not what the alert is about.
+    album="$lead"
     if [ "$ALBUM_MAX" -gt 1 ]; then
         count=1
-        for candidate in $(printf '%s\n' "$listing" | awk '{print $1}' |
-                grep "^${event}_.*\.jpg$" | sort); do
-            [ "$candidate" = "$first" ] && continue
+        for candidate in $(printf '%s\n' "$present" | sort -r); do
+            [ "$candidate" = "$lead" ] && continue
             [ "$count" -lt "$ALBUM_MAX" ] || break
             album="$album,$candidate"
             count=$((count + 1))
@@ -258,23 +292,23 @@ sound: $sound}$cut_short$urgent"
     # The uncompressed original of the key frame, for the copy that matters.
     send_original() {
         [ "$SEND_ORIGINAL" = "1" ] || return 0
-        send_doc "$first" "🔍 original, uncompressed — $first" || log "original_failed name=$first"
+        send_doc "$lead" "🔍 original, uncompressed — $lead" || log "original_failed name=$lead"
     }
 
-    if [ "$ALBUM_MAX" -gt 1 ] && [ "$album" != "$first" ]; then
+    if [ "$ALBUM_MAX" -gt 1 ] && [ "$album" != "$lead" ]; then
         if send_album "$album" "$caption"; then
             send_original
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
             [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
             [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
-            log "event id=$event type=$type frames=$frames key=$first album=1 sent=1"
+            log "event id=$event type=$type frames=$frames key=$lead album=1 sent=1"
             continue
         fi
         log "event id=$event album_failed=1 falling back to single photo"
     fi
 
-    if printf '%s\n' "$listing" | grep -q "^$first "; then
-        if send_photo "$first" "$caption"; then
+    if printf '%s\n' "$present" | grep -q "^$lead$"; then
+        if send_photo "$lead" "$caption"; then
             send_original
             printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
             [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"

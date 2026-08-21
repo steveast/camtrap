@@ -16,7 +16,13 @@ def test_defaults_match_spec(cfg):
     assert cfg.event.jpeg_quality == 95
     assert cfg.camera.target_fps == 5
     assert cfg.detector.warmup_sec == 20.0
-    assert cfg.detector.min_area_pct == 3.0  # above every curtain event measured in the room
+    # Replaying 29 real captures: at 3.0 % one empty-room event of 22 fired, at 2.0 % four did.
+    # The threshold stays until the curtain is masked; one frame at 7 % is motion outright, which
+    # is above every empty-room frame recorded and below every event with a person in it.
+    assert cfg.detector.min_area_pct == 3.0
+    assert cfg.detector.instant_area_pct == 7.0
+    assert cfg.detector.min_motion_frames == 2
+    assert cfg.detector.motion_window_frames == 5
     assert cfg.event.snapshot_interval_sec == 5.0
     assert cfg.event.max_frames_per_event == 60
     assert cfg.spool.max_mb == 1024

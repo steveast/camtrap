@@ -355,6 +355,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-file", default=None, help="append the journal here as well as to stdout"
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="log every analysed frame's changed_pct — for tuning sensitivity, noisy by design",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     status = sub.add_parser("status", help="local state: mode, spool, sounds, languages")
@@ -443,6 +448,8 @@ def main(argv: list[str] | None = None, *, cfg: config_mod.Config | None = None)
     if getattr(args, "log_file", None):
         cfg.log_file = args.log_file
         log.set_file(cfg.log_file)
+    if getattr(args, "trace", False):
+        cfg.log_ticks = True
     try:
         return int(args.func(cfg, args))
     except KeyboardInterrupt:

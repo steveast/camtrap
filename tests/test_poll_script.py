@@ -28,6 +28,16 @@ def rig(tmp_path):
     fake.write_text(
         f"""#!/bin/sh
 set -eu
+# Real ssh consumes its own options before the remote command; so must the stand-in, or the
+# poller's connection-reuse flags would be mistaken for the verb.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    -i|-p|-F) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
 verb="$1"
 case "$verb" in
   list) cat {listing} ;;
@@ -131,15 +141,35 @@ def test_a_motion_event_is_delivered_with_its_frames(rig):
 
 
 def test_the_key_frame_leads_the_album(rig):
-    """The first frame by number is an empty room seconds before anything happened."""
+    """The key frame leads, then the newest frames. `_000` is the room before anything happened."""
     rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
     rig.run()
     album = [n for n in rig.sent() if n.startswith("album-")]
     assert album, "several frames should travel as one group"
-    body = rig.body(album[0])
-    names = body.splitlines()[0]
+    names = rig.body(album[0]).splitlines()[0]
     assert names.startswith("evt_20260820T111500Z_005.jpg"), names
-    assert "evt_20260820T111500Z_000.jpg" in names, "the rest still follow"
+    assert "evt_20260820T111500Z_007.jpg" in names, "the newest frames follow the key one"
+    assert "evt_20260820T111500Z_000.jpg" not in names, (
+        "the oldest pre-buffer frame is an empty room; it belongs on the receiver, not in the alert"
+    )
+
+
+def test_a_key_frame_that_has_not_arrived_yet_never_falls_back_to_the_empty_room(rig):
+    """Measured in production: two of four alerts that afternoon led with `_000`.
+
+    The manifest sorts ahead of the frames it names, so it reaches the receiver naming a frame that
+    is still uploading. The fallback then chose `_000` — by construction the oldest pre-buffer
+    frame, the room before anyone was in it. Whatever is happening is in the LATEST frame.
+    """
+    rig.add_event(
+        "evt_20260820T112000Z", "motion", frames=4, key="evt_20260820T112000Z_005.jpg"
+    )  # key names a frame the listing does not have yet
+    rig.run()
+    sent = [n for n in rig.sent() if n.startswith(("album-", "photo-"))]
+    assert sent, "it must still deliver something"
+    names = rig.body(sent[0]).splitlines()[0] if sent[0].startswith("album-") else sent[0]
+    assert "_003.jpg" in names, f"the newest frame present should lead, got {names}"
+    assert not names.startswith("evt_20260820T112000Z_000.jpg"), names
 
 
 def test_a_single_frame_event_falls_back_to_one_photo(rig):

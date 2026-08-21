@@ -212,6 +212,18 @@ class Runner:
         if now < self._burst_until and self.events.active is not None:
             self.events.feed(frame, now=now, changed_pct=0.0, force=True)
         detection = self.detector.submit(frame, now=now)
+        if self.cfg.log_ticks:
+            # One line per analysed frame. This is the only way to answer "why did it not react":
+            # the verdict is a threshold on changed_pct, and without the per-frame number every
+            # discussion about sensitivity is guesswork. ~7 lines a second, so it is a diagnostic
+            # run, not a default.
+            log.tick(
+                "frame",
+                pct=round(detection.changed_pct, 2),
+                kind=detection.kind.value,
+                why=detection.detail or "-",
+                above=int(detection.changed_pct >= self.cfg.detector.min_area_pct),
+            )
 
         if detection.kind is EventKind.NONE:
             self.arming.note_quiet(now=now)
