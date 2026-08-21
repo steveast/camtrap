@@ -21,6 +21,11 @@ def cfg(tmp_path):
     c.upload.mega_dir = str(tmp_path / "mega")
     (tmp_path / "sounds").mkdir(parents=True, exist_ok=True)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    # Never touch the real machine from a test: arming would otherwise lock the developer's screen
+    # and take an exclusive grab of the actual power buttons. Tests that exercise those switch
+    # them on explicitly.
+    c.sound.lock_on_arm = False
+    c.sound.grab_power_button = False
     return c
 
 

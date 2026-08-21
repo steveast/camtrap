@@ -82,6 +82,11 @@ class Runner:
         self._warned_event: str | None = None
         self._armed_actions_done = False
         self._power_grab = None
+        #: The most recent decoded frame, so a tamper signal that arrives between frames (power,
+        #: lid, the power button) still gets a picture of the room as it is, not just the
+        #: pre-buffer from seconds earlier.
+        self._last_frame: np.ndarray | None = None
+        self._burst_until = float("-inf")
         self.responder.set_gate(self.arming.gate)
 
     def request_stop(self, *_: object) -> None:
@@ -193,7 +198,12 @@ class Runner:
     def on_frame(self, frame: np.ndarray, now: float) -> EventKind:
         """One decimated frame: detect, slice into an event, respond with sound."""
         self.stats.frames += 1
+        self._last_frame = frame
         self.events.observe(frame, now=now)
+
+        # A tamper burst outranks the detector: keep taking frames whatever it thinks.
+        if now < self._burst_until and self.events.active is not None:
+            self.events.feed(frame, now=now, changed_pct=0.0, force=True)
         detection = self.detector.submit(frame, now=now)
 
         if detection.kind is EventKind.NONE:
@@ -239,6 +249,11 @@ class Runner:
         self.stats.tamper_events += 1
         self.stats.signals.extend(s.name for s in signals)
         names = [s.name for s in signals]
+        # Power, lid and power-button signals arrive between frames, so use the newest frame we
+        # have rather than opening the event with nothing but stale pre-buffer.
+        if frame is None:
+            frame = self._last_frame
+        self._burst_until = now + self.cfg.event.tamper_burst_sec
         event = self.events.begin(EventKind.TAMPER, now=now, frame=frame, signals=names)
         self.spool.mark_tamper(event.event_id)
         self.events.note_motion(now=now)

@@ -312,6 +312,7 @@ def test_a_failing_uploader_never_stops_the_loop(framed, capsys):
 def test_arming_locks_the_screen_once(wired):
     """The owner has left: an unlocked session is a way in, and a way to stop the agent."""
     runner, _sysfs, _session, cmds = wired
+    runner.cfg.sound.lock_on_arm = True
     runner.cfg.sound.grab_power_button = False
     runner.step(0.0)
     assert not cmds.ran("lock-session"), "not armed yet: the exit delay is still running"
@@ -348,6 +349,7 @@ def test_the_power_buttons_are_grabbed_while_armed(wired, monkeypatch):
             released.append(True)
 
     runner, _sysfs, session, _cmds = wired
+    runner.cfg.sound.grab_power_button = True
     monkeypatch.setattr(
         inputdev,
         "scan",
@@ -384,6 +386,7 @@ def test_finish_releases_the_power_buttons(wired, monkeypatch):
             released.append(True)
 
     runner, _sysfs, _session, _cmds = wired
+    runner.cfg.sound.grab_power_button = True
     monkeypatch.setattr(
         inputdev,
         "scan",
@@ -421,6 +424,8 @@ def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
             return codes
 
     runner, _sysfs, _session, cmds = wired
+    runner.cfg.sound.lock_on_arm = True
+    runner.cfg.sound.grab_power_button = True
     monkeypatch.setattr(
         inputdev,
         "scan",
@@ -456,6 +461,7 @@ def test_reading_input_never_ends_the_run(wired, monkeypatch, capsys):
             raise OSError("device vanished")
 
     runner, _sysfs, _session, _cmds = wired
+    runner.cfg.sound.grab_power_button = True
     monkeypatch.setattr(
         inputdev,
         "scan",
@@ -468,3 +474,102 @@ def test_reading_input_never_ends_the_run(wired, monkeypatch, capsys):
     runner.step(70.0)
     runner.step(71.0)  # must not raise
     assert "input_read_failed" in capsys.readouterr().out
+
+
+# --- a tamper signal must arrive with a picture of the room as it is right now -------------------
+
+
+def test_a_power_button_press_captures_a_fresh_frame(framed, monkeypatch):
+    """A siren without a face is half the job: the press has to produce a photograph."""
+    import json
+
+    from camtrap import inputdev
+
+    class FakeGrab:
+        def __init__(self, devices):
+            self.queue = [inputdev.KEY_POWER]
+
+        def acquire(self):
+            return 1
+
+        def release(self):
+            pass
+
+        def read_key_presses(self):
+            codes, self.queue = self.queue, []
+            return codes
+
+    runner, blank, _cmds = framed
+    runner.cfg.sound.grab_power_button = True
+    runner._armed_actions_done = False  # let the fixture's arming redo itself with the fake
+    monkeypatch.setattr(
+        inputdev,
+        "scan",
+        lambda *a, **k: [
+            inputdev.InputDevice("event1", "Power Button", frozenset({inputdev.KEY_POWER}))
+        ],
+    )
+    monkeypatch.setattr(inputdev, "Grab", FakeGrab)
+
+    # a distinctive frame is the newest thing the loop has seen
+    intruder = blank()
+    intruder[100:300, 200:500] = 230
+    runner.on_frame(intruder, now=100.0)
+
+    runner.step(100.5)  # arms and grabs
+    runner.step(101.0)  # reads the press -> tamper
+
+    assert "power_button_pressed" in runner.stats.signals
+    event = runner.events.active
+    assert event is not None and event.kind.value == "tamper"
+    assert event.frames_written > 0, "the event must carry frames, not just a signal"
+
+    # The manifest may already have been drained to the receiver, so look in both places.
+    inbox = Path(runner.cfg.upload.local_inbox)
+    candidates = [
+        runner.cfg.spool_dir / f"{event.event_id}.json",
+        inbox / f"{event.event_id}.json",
+    ]
+    manifest_path = next(p for p in candidates if p.exists())
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["type"] == "tamper"
+    assert "power_button_pressed" in manifest["signals"]
+
+
+def test_a_tamper_burst_ignores_the_throttle(framed):
+    """One frame every 5 s photographs the door closing. A burst photographs the person."""
+    runner, blank, _cmds = framed
+    runner.cfg.event.tamper_burst_sec = 10.0
+    runner.cfg.event.tamper_burst_interval_sec = 1.0
+
+    runner.on_frame(blank(), now=200.0)
+    runner._tamper([runner.monitor.report_external("ac_offline", now=200.5)], now=200.5)
+    event = runner.events.active
+    assert event is not None
+    before = event.frames_written
+
+    # frames arriving 1 s apart during the burst are all kept, throttle notwithstanding
+    for tick in range(1, 6):
+        frame = blank()
+        frame[50:100, 50:100] = 90  # small change: normally throttled away
+        runner.on_frame(frame, now=200.5 + tick)
+
+    assert event.frames_written >= before + 4, (
+        f"burst should keep ~1 frame/s, got {event.frames_written - before}"
+    )
+
+
+def test_the_burst_ends_and_the_throttle_returns(framed):
+    runner, blank, _cmds = framed
+    runner.cfg.event.tamper_burst_sec = 3.0
+    runner.on_frame(blank(), now=300.0)
+    runner._tamper([runner.monitor.report_external("lid_closed", now=300.0)], now=300.0)
+    event = runner.events.active
+    for tick in range(1, 4):
+        runner.on_frame(blank(), now=300.0 + tick)
+    after_burst = event.frames_written
+    for tick in range(5, 9):  # past tamper_burst_sec
+        small = blank()
+        small[10:40, 10:40] = 80
+        runner.on_frame(small, now=300.0 + tick)
+    assert event.frames_written <= after_burst + 1, "the throttle must come back"

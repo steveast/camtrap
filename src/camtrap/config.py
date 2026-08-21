@@ -100,6 +100,11 @@ class EventConfig:
     # immediately, subject to its own shorter floor.
     boost_area_pct: float = 4.0
     boost_min_interval_sec: float = 1.0
+    # After a tamper signal the throttle is suspended: whoever pulled the cable or pressed the
+    # power button is in the room NOW, and a frame every 5 s is how you end up with a photo of
+    # the door closing behind them. One frame a second for ten seconds instead.
+    tamper_burst_sec: float = 10.0
+    tamper_burst_interval_sec: float = 1.0
 
 
 @dataclass

@@ -140,7 +140,9 @@ class EventWriter:
         if self.active is not None:
             self.active.last_motion = now
 
-    def feed(self, frame: np.ndarray, *, now: float, changed_pct: float = 0.0) -> bool:
+    def feed(
+        self, frame: np.ndarray, *, now: float, changed_pct: float = 0.0, force: bool = False
+    ) -> bool:
         """Add a frame to the active event if the throttle and the cap allow it.
 
         `changed_pct` lets a big change jump the throttle. Without that, an event opened by a
@@ -155,7 +157,10 @@ class EventWriter:
             changed_pct >= self.cfg.event.boost_area_pct
             and since >= self.cfg.event.boost_min_interval_sec
         )
-        if since < self.cfg.event.snapshot_interval_sec and not boosted:
+        if force and since >= self.cfg.event.tamper_burst_interval_sec:
+            # A tamper burst ignores the throttle: the person is in the room right now.
+            boosted = True
+        elif since < self.cfg.event.snapshot_interval_sec and not boosted:
             return False
         if event.frames_written >= self.cfg.event.max_frames_per_event:
             if not event.truncated:
