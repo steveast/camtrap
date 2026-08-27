@@ -103,7 +103,7 @@ def test_a_spiky_signal_is_still_motion(cfg):
 
 
 def test_a_curtain_sized_change_never_fires(cfg):
-    """1.6 % was the loudest the curtain ever measured. It must stay silent however long it goes on."""
+    """1.6 % was the loudest the curtain ever measured — silent however long it goes on."""
     cfg.detector.warmup_sec = 0.0
     detector = Detector(cfg)
     _settle(detector)
