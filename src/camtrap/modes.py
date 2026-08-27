@@ -12,6 +12,7 @@ import subprocess
 import time
 
 from . import log, sounds
+from . import tamper as tamper_mod
 from .camera import Camera
 from .config import Config
 from .heartbeat import publish as publish_heartbeat
@@ -81,6 +82,18 @@ def preflight(
     missing = sounds.missing_sounds(cfg)
     rows.append(("sound files", not missing, ",".join(missing) if missing else "siren + warnings"))
 
+    # What will actually make a noise, spelled out before the owner walks out. Both halves of
+    # this policy were narrowed by hand, and a trap that is quieter than its owner remembers is
+    # worse than one that is louder. A misspelled signal name raises here rather than being
+    # silently unmatched at the moment the siren was supposed to sound.
+    try:
+        allowed = sorted(tamper_mod.siren_signals(cfg))
+        policy_detail = f"siren: {', '.join(allowed) or 'nothing'}"
+        policy_detail += "; motion: " + ("warning" if cfg.sound.warn_on_motion else "silent")
+        rows.append(("sound policy", bool(allowed), policy_detail))
+    except ValueError as exc:
+        rows.append(("sound policy", False, str(exc)))
+
     if probe:
         ok, detail = audio_probe(cfg, restore=restore_audio)
         rows.append(("speakers", ok, detail))
@@ -95,7 +108,7 @@ def preflight(
     inhibit = selftest.check_inhibit()
     rows.append(("no-sleep", inhibit.verdict != selftest.FAIL, inhibit.detail))
 
-    blocking = {"camera", "sound files", "speakers"}
+    blocking = {"camera", "sound files", "speakers", "sound policy"}
     ready = all(ok for name, ok, _ in rows if name in blocking)
     return ready, rows
 

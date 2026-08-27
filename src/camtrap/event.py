@@ -38,10 +38,12 @@ class Event:
     sound_latency_ms: int | None = None
     sound_evidence_confirmed: bool = False
     boosted_frames: int = 0
-    #: Frame index that showed the most change — the one worth looking at. The first frame by
-    #: number is the OLDEST pre-buffer frame, five seconds before anything happened: an empty
-    #: room. Sending that as "the photo" is why a person walking in appeared to go unphotographed.
+    #: The frame worth looking at, and what it scored. NOT simply the most changed one: the
+    #: first frame by number is the OLDEST pre-buffer frame — an empty room five seconds before
+    #: anything happened — and the MOST CHANGED one is often the moment a light came on, which is
+    #: a photograph of darkness. See `_key_score`.
     key_index: int = 0
+    key_score: float = 0.0
     key_changed_pct: float = 0.0
 
     @property
@@ -121,6 +123,12 @@ class EventWriter:
             self._write_frame(
                 event, trigger, now=now, throttled=True, changed_pct=changed_pct or 0.0
             )
+            if event.key_score <= 0.0:
+                # A cable pull carries no changed_pct at all, so nothing scores and the key would
+                # stay at index 0 — the oldest pre-buffer frame, an empty room. Two tamper alerts
+                # in August led with `_000.jpg` for exactly this reason. The trigger frame is the
+                # room as it was when the signal arrived, and that is the floor.
+                event.key_index = event.frames_written - 1
 
         # Write the manifest immediately, marked open. If the agent dies mid-event — battery
         # pulled, machine shut down, laptop carried off — the frames would otherwise arrive with
@@ -154,8 +162,13 @@ class EventWriter:
         if event is None or event.single_frame:
             return False
         since = now - event.last_frame_at
+        boost_pct = self.cfg.event.boost_area_pct
+        # `> 0`, not `>= 0`: with the threshold at zero every frame clears it, so treating 0 as
+        # "no threshold" would turn the boost permanently ON and give a frame a second — the
+        # exact opposite of what disabling it means.
         boosted = (
-            changed_pct >= self.cfg.event.boost_area_pct
+            boost_pct > 0
+            and changed_pct >= boost_pct
             and since >= self.cfg.event.boost_min_interval_sec
         )
         if force and since >= self.cfg.event.tamper_burst_interval_sec:
@@ -214,6 +227,36 @@ class EventWriter:
 
     # --- artefacts -----------------------------------------------------------
 
+    def _key_score(
+        self, event: Event, frame: np.ndarray, *, now: float, changed_pct: float
+    ) -> float:
+        """What this frame is worth AS THE PHOTO — which is not how much of it changed.
+
+        Two corrections to raw `changed_pct`, each from a frame that was actually delivered:
+
+        A light coming on in a dark room changes ~99 % of the pixels, so the transition frame won
+        every time — and it is the one frame in the event where the sensor has not caught up and
+        the room is still black. Measured: mean luma 14 against 119 two frames later.
+
+        And the frames right after the trigger are the worst ones of a real intrusion: a detector
+        wakes up after motion has begun, so it opens the event on a back in a doorway. Waiting
+        `key_settle_sec` before a frame may lead cost nothing — the frames are written either way,
+        and the poller is a cron tick behind regardless.
+
+        Neither is a veto. An event that is dark from end to end still has to name a frame, and a
+        weight beats a filter for that: the least bad frame wins instead of index 0.
+        """
+        cfg = self.cfg.event
+        # Every 8th pixel: a numpy stride, not a resize, and a mean over 1/64th of the frame is
+        # the same number to well within the margin that separates 14 from 119.
+        luma = float(frame[::8, ::8].mean())
+        weight = 1.0
+        if luma < cfg.key_min_luma or luma > cfg.key_max_luma:
+            weight *= 0.05
+        if now - event.started < cfg.key_settle_sec:
+            weight *= 0.25
+        return changed_pct * weight
+
     def _write_frame(
         self,
         event: Event,
@@ -235,7 +278,9 @@ class EventWriter:
             log.emit("frame_error", id=event.event_id, index=index)
             return
         event.frames_written = index + 1
-        if changed_pct > event.key_changed_pct:
+        score = self._key_score(event, frame, now=now, changed_pct=changed_pct)
+        if score > event.key_score:
+            event.key_score = score
             event.key_changed_pct = changed_pct
             event.key_index = index
         if throttled:

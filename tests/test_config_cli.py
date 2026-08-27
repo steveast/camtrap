@@ -23,7 +23,10 @@ def test_defaults_match_spec(cfg):
     assert cfg.detector.instant_area_pct == 7.0
     assert cfg.detector.min_motion_frames == 2
     assert cfg.detector.motion_window_frames == 5
-    assert cfg.event.snapshot_interval_sec == 5.0
+    # One frame at once, then one every 10 s while the event lasts. The boost that used to jump
+    # this throttle is off — 0 means disabled, and it is what turned the cadence into a burst.
+    assert cfg.event.snapshot_interval_sec == 10.0
+    assert cfg.event.boost_area_pct == 0.0
     assert cfg.event.max_frames_per_event == 60
     assert cfg.spool.max_mb == 1024
     assert cfg.spool.retention_days == 14
@@ -34,6 +37,10 @@ def test_defaults_match_spec(cfg):
     assert cfg.sound.hold_poll_ms == 250
     assert cfg.arming.mode == "on_lock"
     assert cfg.arming.grace_after_unlock_sec == 300.0
+    # The audible policy, narrowed after the first hotel run: nothing speaks on motion, and only
+    # the two unambiguous signals scream. Both are one config line away from coming back.
+    assert cfg.sound.warn_on_motion is False
+    assert cfg.tamper.siren_signals == ["ac_offline", "lid_closed"]
 
 
 def test_toml_overrides_only_named_keys(tmp_path):

@@ -210,13 +210,27 @@ and the siren does not depend on the network at all.
 
 An event is a series of frames from one intrusion. Its type is `motion` (movement in frame),
 `light` (lighting change) or `tamper` (the laptop is being handled, see 3.3). The type decides
-queue priority, the shape of the alert, and which sound plays — `motion` triggers the spoken
-warning, `tamper` the siren, `light` nothing by default (3.4). Everything else is shared.
+queue priority and the shape of the alert. Which sound plays is a separate policy that has since
+been narrowed to almost nothing — see 3.4: as shipped, `motion` and `light` are silent and only
+two of the five tamper signals sound the siren. Everything else is shared.
 
-- First frame immediately, then one every `SNAPSHOT_INTERVAL = 5 s` while motion holds.
+- First frame immediately, then one every `SNAPSHOT_INTERVAL = 10 s` for as long as the event
+  stays open. A change far above the threshold used to jump this throttle and take a frame a
+  second (`BOOST_AREA_PCT`); it is disabled — set to 0 — because the six-photo album it produced
+  was six views of the same second, and the point of the cadence is to show the visit, not the
+  instant.
 - **Pre-buffer**: a ring buffer of `PREBUFFER_FRAMES = 5` frames (1/s) kept from before the
   trigger. A detector by definition wakes up after motion has begun, and without the buffer the
   first frame is a back in the doorway.
+- **Which frame leads the alert.** The manifest names one `key_frame`, chosen by what the frame
+  is worth as a photograph and not by how much of it changed. Raw change picks the wrong frame
+  twice over: a light coming on in a dark room changes ~99 % of the pixels while the sensor is
+  still black, and the frames that open an event are the ones the detector caught late — a back
+  in a doorway. So a frame is discounted if its mean luma falls outside
+  `KEY_MIN_LUMA = 25 … KEY_MAX_LUMA = 245`, and again if it was written within
+  `KEY_SETTLE = 5 s` of the event opening. Discounted, not excluded: an event that is dark from
+  end to end still has to name its least bad frame, and a tamper event that carries no change at
+  all leads with the trigger frame rather than with the oldest frame in the pre-buffer.
 - The event closes after `EVENT_GAP = 30 s` without motion.
 - `MAX_FRAMES_PER_EVENT = 60`. On truncation: a log line and `truncated: true` in the manifest.
   Silent truncation is unacceptable — it reads as "everything was captured" when it was not.
@@ -295,6 +309,32 @@ Sound comes in **two stages**, and the difference between them is the whole desi
 |---|---|---|---|---|
 | 1 — warning | `motion` (someone is in the room) | spoken notice, in the local language then English | `WARN_VOLUME_PCT = 85` | none |
 | 2 — alarm | `tamper` (the laptop is being handled) | two-tone police siren | `SOUND_VOLUME_PCT = 100` | session lock, input hold |
+
+**As shipped after the first hotel run, most of this is switched off.** The design below is
+unchanged and one config line away in each case; what changed is the policy, on the owner's
+instruction after using the trap for a night:
+
+| | |
+|---|---|
+| `WARN_ON_MOTION = false` | **Stage 1 never plays.** Motion is photographed and alerted, in silence. |
+| `SIREN_SIGNALS = ["ac_offline", "lid_closed"]` | Only the cable and the lid scream. `scene_shift`, `power_button_pressed` and `camera_gone` still open a tamper event, still take the burst of frames and still alert — quietly. |
+
+The reason is the same for both, and it is the reason stage 1 existed in the first place, applied
+one turn further: **the owner is the person most likely to set this off.** Coming back into the
+room is motion; picking the laptop up to put it in a bag is `scene_shift`; reaching for the power
+button to stop the noise is `power_button_pressed`. A trap that shouts at its owner at the door
+every evening is a trap that stops being armed, and an unarmed trap protects nothing. Frames cost
+nothing and are always taken; noise is spent only where the signal cannot plausibly be the owner.
+
+The cost is stated rather than hidden: **a press on the power button is the one act that can end
+the trap, and it is now silent.** Holding it for several seconds cuts power in hardware. The trap
+still blocks the press, still photographs it and still sends the 🆘 alert — it just does not
+scream while it happens. Put `"power_button_pressed"` back in `SIREN_SIGNALS` to trade that back.
+
+A misspelled signal name is refused by `preflight` rather than silently unmatched: silence at the
+moment the siren was meant to sound is the one failure that leaves no evidence behind. `guard
+check` prints the live policy — which signals scream, and whether motion speaks — so what the
+trap will do is visible before walking out rather than remembered.
 
 **Why two stages rather than one.** They address different moments. Someone who has just walked
 in has not touched anything yet, and the cheapest way to end the visit is to tell them the room

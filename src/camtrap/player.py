@@ -1,4 +1,4 @@
-"""The audible response: a spoken warning on motion, a police siren on tamper.
+"""The audible response: a police siren on tamper, and a spoken warning that ships switched off.
 
 Spec 3.4. Three rules shape this module:
 
@@ -9,6 +9,12 @@ Spec 3.4. Three rules shape this module:
   is re-asserted every `hold_poll_ms`.
 * **Stage 1 is a notice, stage 2 is an alarm.** Motion gets the voice at 85 %; tampering gets the
   siren at 100 %, plus a session lock. Stage 1 never locks anything.
+
+Both stages are built and tested here; **which of them the trap actually uses is policy, and the
+policy is narrow.** `sound.warn_on_motion` is false and `tamper.siren_signals` holds two names, so
+in a default run this module plays the siren for a pulled cable and a closed lid, and nothing else
+at all (spec 3.4). The machinery stays whole because the decision is a config line, not a deletion:
+`warn-test` still plays the voice, and putting a signal back needs no code.
 """
 
 from __future__ import annotations

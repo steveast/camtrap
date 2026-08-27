@@ -1,8 +1,8 @@
 """The run loop: capture, detect, slice into events, respond with sound, hold the sound on.
 
-A frame is optional; a tick is not. Motion in frame produces a spoken warning, tampering produces
-the siren, and the tamper path does not depend on the camera working — losing the eyes must not
-cost the ears.
+A frame is optional; a tick is not. Every signal produces frames and an alert; only a pulled cable
+and a closed lid produce sound (spec 3.4, `tamper.siren_signals`). The tamper path does not depend
+on the camera working — losing the eyes must not cost the ears.
 
 Around this file: `lifecycle.py` starts and ends a real run (signals, hardening, the final word to
 the receiver), and `modes.py` holds the operator-facing runs — preflight, watch, drill, selftest.
@@ -208,10 +208,13 @@ class Runner:
         self._last_frame = frame
         self.events.observe(frame, now=now)
 
-        # A tamper burst outranks the detector: keep taking frames whatever it thinks.
-        if now < self._burst_until and self.events.active is not None:
-            self.events.feed(frame, now=now, changed_pct=0.0, force=True)
         detection = self.detector.submit(frame, now=now)
+        # A tamper burst outranks the detector: keep taking frames whatever it thinks. The
+        # detector runs first only so the burst frames carry their real changed_pct — feeding
+        # them as 0 meant the frames taken while the person was still in the room could never
+        # be chosen as the key frame, and the alert led with the frame that opened the event.
+        if now < self._burst_until and self.events.active is not None:
+            self.events.feed(frame, now=now, changed_pct=detection.changed_pct, force=True)
         if self.cfg.log_ticks:
             # One line per analysed frame. This is the only way to answer "why did it not react":
             # the verdict is a threshold on changed_pct, and without the per-frame number every
@@ -359,7 +362,10 @@ class Runner:
         event = self.events.begin(EventKind.TAMPER, now=now, frame=frame, signals=names)
         self.spool.mark_tamper(event.event_id)
         self.events.note_motion(now=now)
-        if not tamper_mod.plays_siren(signals):
+        if not tamper_mod.plays_siren(self.cfg, signals):
+            # The event, the frames and the alert all happened; only the noise did not. Say so,
+            # or the journal reads as if the signal was missed entirely.
+            log.emit("tamper_quiet", signals=",".join(names), reason="not_in_siren_signals")
             return
         started = self.clock()
         result = self.responder.on_tamper(names, now=now)

@@ -93,8 +93,25 @@ def test_unlocked_session_stays_silent_on_a_cable_pull(wired):
     assert not runner.spawned.played_siren()
 
 
-def test_motion_plays_the_warning_not_the_siren(wired):
+def test_motion_says_nothing_at_all_by_default(wired):
+    """Stage 1 is off since the first hotel run. The room stays quiet; the frames still happen.
+
+    Deliberately asserted on the default config rather than on a fixture that switches it off:
+    if the default ever drifts back to speaking, this is the test that says so.
+    """
     runner, _sysfs, _session, cmds = wired
+    runner.step(0.0)
+    runner.step(70.0)
+    runner.motion(now=70.0)
+    assert runner.stats.warnings == 0
+    assert not runner.spawned.played("warn-vi.ogg")
+    assert not runner.spawned.played_siren()
+    assert cmds.count("lock-session") <= 1  # from arming, and nothing else
+
+
+def test_motion_plays_the_warning_when_it_is_switched_back_on(wired):
+    runner, _sysfs, _session, cmds = wired
+    runner.cfg.sound.warn_on_motion = True
     runner.step(0.0)
     runner.step(70.0)
     runner.motion(now=70.0)
@@ -176,17 +193,18 @@ def framed(wired):
     return runner, blank, cmds
 
 
-def test_motion_in_frame_plays_the_warning_only(framed):
+def test_motion_in_frame_is_recorded_silently(framed):
+    """The whole camera path with the shipped sound policy: evidence, no noise."""
     runner, blank, cmds = framed
     for index in range(6):
         frame = blank()
         frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
         runner.on_frame(frame, now=70.0 + index * 0.2)
-    assert runner.stats.warnings >= 1
-    assert runner.spawned.played("warn-vi.ogg")
+    assert runner.stats.motion_events >= 1  # seen and written
+    assert runner.stats.warnings == 0
+    assert not runner.spawned.played("warn-vi.ogg")
     assert not runner.spawned.played_siren()
-    # The session is locked once, by arming. A warning must not lock anything by itself:
-    # stage 1 is a notice, not a confrontation.
+    # The session is locked once, by arming, and by nothing on the motion path.
     assert cmds.count("lock-session") <= 1
 
 
@@ -206,15 +224,35 @@ def test_motion_writes_frames_and_a_manifest(framed):
     assert runner.stats.motion_events >= 1
 
 
-def test_a_lifted_case_sounds_the_siren_from_the_camera_path(framed):
+def _lift_the_case(runner):
+    """Thirty frames of a textured scene, then the same scene shifted sideways."""
     import numpy as np
 
-    runner, _blank, cmds = framed
     rng = np.random.default_rng(5)
     texture = np.dstack([rng.integers(0, 255, size=(360, 640), dtype=np.uint8)] * 3)
     for index in range(30):
         runner.on_frame(texture, now=100.0 + index * 0.2)
     runner.on_frame(np.roll(texture, 60, axis=1), now=110.0)
+
+
+def test_a_lifted_case_is_recorded_but_no_longer_sounds(framed):
+    """`scene_shift` left the siren set on the owner's instruction.
+
+    It fired on the owner themselves walking back in — the camera sees the room change, not who
+    changed it — and an alarm that greets you at your own door is an alarm you stop arming. The
+    detection is unchanged: still a tamper event, still the burst of frames, still an alert.
+    """
+    runner, _blank, _cmds = framed
+    _lift_the_case(runner)
+    assert "scene_shift" in runner.stats.signals
+    assert runner.stats.tamper_events >= 1
+    assert not runner.spawned.played_siren()
+
+
+def test_a_lifted_case_sounds_the_siren_when_the_signal_is_configured_to(framed):
+    runner, _blank, cmds = framed
+    runner.cfg.tamper.siren_signals = ["ac_offline", "lid_closed", "scene_shift"]
+    _lift_the_case(runner)
     assert runner.spawned.played_siren()
     assert "scene_shift" in runner.stats.signals
     assert cmds.ran("lock-session")
@@ -230,6 +268,7 @@ def test_a_light_switch_makes_no_sound_by_default(framed):
 
 def test_light_can_be_configured_to_warn(framed):
     runner, blank, _cmds = framed
+    runner.cfg.sound.warn_on_motion = True
     runner.cfg.sound.warn_on_light = True
     runner.on_frame(blank(215), now=100.0)
     assert runner.spawned.played("warn-vi.ogg")
@@ -239,6 +278,7 @@ def test_light_can_be_configured_to_warn(framed):
 def test_warning_is_requested_once_per_event_not_once_per_frame(framed):
     """Asking per frame re-enters the responder five times a second and buries the journal."""
     runner, blank, _cmds = framed
+    runner.cfg.sound.warn_on_motion = True
     for index in range(12):
         frame = blank()
         frame[120:260, 100 + index * 15 : 230 + index * 15] = 210
@@ -249,6 +289,7 @@ def test_warning_is_requested_once_per_event_not_once_per_frame(framed):
 
 def test_a_new_event_warns_again(framed):
     runner, blank, _cmds = framed
+    runner.cfg.sound.warn_on_motion = True
     for index in range(4):
         frame = blank()
         frame[120:260, 100 + index * 20 : 230 + index * 20] = 210
@@ -408,12 +449,8 @@ def test_finish_releases_the_power_buttons(wired, monkeypatch):
     assert released, "however the run ends, the buttons go back"
 
 
-def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
-    """The owner's idea: if the press cannot switch the machine off, let it set off the alarm.
-
-    Holding the button for several seconds still cuts power in hardware — but the siren now starts
-    on the first press, so those seconds are loud ones.
-    """
+def _press_the_power_button(runner, monkeypatch):
+    """Arm the trap with one power-button press waiting in the grabbed device's queue."""
     from camtrap import inputdev
 
     class FakeGrab:
@@ -430,7 +467,6 @@ def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
             codes, self.queue = self.queue, []
             return codes
 
-    runner, _sysfs, _session, cmds = wired
     runner.cfg.sound.lock_on_arm = True
     runner.cfg.sound.grab_power_button = True
     monkeypatch.setattr(
@@ -445,6 +481,30 @@ def test_a_power_button_press_sounds_the_siren(wired, monkeypatch):
     runner.step(0.0)
     runner.step(70.0)  # armed: buttons grabbed, queue holds one press
     runner.step(71.0)
+
+
+def test_a_power_button_press_is_blocked_and_recorded_but_silent_by_default(wired, monkeypatch):
+    """The press is still taken away from the desktop, still a tamper event, still alerted.
+
+    It just makes no noise: `power_button_pressed` left the siren set with `scene_shift`, on the
+    owner's instruction, because both of them fired on the owner's own return. The cost is real
+    and belongs in a test rather than in a comment — this is the one act that can end the trap,
+    and it is now silent unless the signal is put back.
+    """
+    runner, _sysfs, _session, _cmds = wired
+    _press_the_power_button(runner, monkeypatch)
+
+    assert "power_button_pressed" in runner.stats.signals
+    assert runner.stats.tamper_events >= 1
+    assert not runner.spawned.played_siren()
+
+
+def test_a_power_button_press_sounds_the_siren_when_configured_to(wired, monkeypatch):
+    """The owner's earlier idea, kept one config line away: if the press cannot switch the
+    machine off, let it set off the alarm."""
+    runner, _sysfs, _session, cmds = wired
+    runner.cfg.tamper.siren_signals = ["ac_offline", "lid_closed", "power_button_pressed"]
+    _press_the_power_button(runner, monkeypatch)
 
     assert "power_button_pressed" in runner.stats.signals
     assert runner.spawned.played_siren(), "a press while armed must be audible"
@@ -590,7 +650,7 @@ def test_the_siren_waits_for_the_first_frame_to_be_acknowledged(framed, sysfs):
     siren fired before anything left the box. This asserts the production wiring, because the
     failure is invisible: the siren still sounds, the promise just quietly does not hold.
     """
-    runner, blank, _cmds = framed
+    runner, _blank, _cmds = framed
     order: list[str] = []
 
     class Watching:

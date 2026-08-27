@@ -2,21 +2,25 @@
 
 A camera trap running on a laptop, for a hotel room you have to leave your things in.
 
-**Sound is the point, and it escalates in two stages.**
+**Sound is the point, and it is spent narrowly.**
 
-- **Someone is in the room** → a spoken warning, in the local language and then English:
-  *"Attention. This laptop is protected by an alarm and a camera."* Most visits end there, without
-  an incident.
-- **The laptop is picked up** — cable pulled, lid closed, case lifted, power button pressed → a
-  camera-shutter click, and then a police siren at full volume which cannot be silenced from the
-  keyboard. The click needs no language: it says a picture was just taken. Carrying a screaming
-  laptop out of a hotel room is not something people go through with.
+- **The cable is pulled or the lid is closed** → a camera-shutter click, and then a police siren
+  at full volume which cannot be silenced from the keyboard. The click needs no language: it says
+  a picture was just taken. Carrying a screaming laptop out of a hotel room is not something
+  people go through with.
+- **Anything else** — someone in the room, the case lifted, the power button pressed, the camera
+  unplugged → photographed, uploaded and alerted **in silence**.
 
-The camera side documents what happened; sound is what changes what happens. Keeping the siren for
-the case that deserves it is what keeps the siren believable.
+That split is deliberate and was narrowed after the first night of real use: the person most
+likely to set a camera trap off is its owner, walking back in and picking their own laptop up. A
+trap that shouts at you at the door every evening is a trap you stop arming, and an unarmed trap
+protects nothing. Frames cost nothing and are always taken; noise is spent only where the signal
+cannot plausibly be you. Both halves are one config line away — the spoken warning is built,
+tested and shipped, just switched off (`sound.warn_on_motion`, `tamper.siren_signals`).
 
 Alongside that it works as a recorder: motion detection through the built-in webcam, a snapshot
-every ~5 s while motion lasts, immediate off-box upload, and a Telegram alert with the photo and
+at once and then every 10 s for as long as the visit lasts, immediate off-box upload, and a
+Telegram alert with the photo and
 an exact timestamp — the kind of evidence that turns "I think something is missing" into a
 concrete conversation with hotel management and a usable police report.
 
@@ -60,8 +64,8 @@ disarms it and opens a grace window, so picking the laptop up does not set off a
 laptop ──ssh forced-cmd──▶ VPS ◀──cron──── Pi at home ──▶ Telegram
    │     frames, heartbeat  inbox, state   token lives only here
    ├──cp──▶ ~/MEGA/camtrap  (backup warehouse, recompressed, no alerts)
-   ├──motion in frame ────────────▶ 🔊 spoken warning, local language then English
-   └──power / lid / frame shift ──▶ 🔊 police siren (local, no network involved)
+   ├──power pulled / lid closed ──▶ 🔊 police siren (local, no network involved)
+   └──motion / lift / power key ──▶ 📷 frames and an alert, no sound
 ```
 
 Four decisions everything else follows from:
@@ -76,8 +80,9 @@ Four decisions everything else follows from:
   home, which polls the VPS and does the sending.
 - **A false siren is worse than a missed one.** Warm-up, an ignore mask, lighting-change
   suppression, a grace window after a session unlock: an alarm that goes off on its own teaches
-  you to ignore it, and then the trap is worthless. Note the asymmetry — a warning during
-  housekeeping is expected behaviour, a *siren* at a cleaner is a bug.
+  you to ignore it, and then the trap is worthless. Taken to its conclusion, this is why the
+  siren is now left to the cable and the lid alone: a *siren* at a cleaner is a bug, and so is one
+  at the owner coming home.
 
 ## Warning languages
 

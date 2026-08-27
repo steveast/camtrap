@@ -22,9 +22,9 @@ CAMERA_GONE = "camera_gone"
 SCENE_SHIFT = "scene_shift"
 POWER_BUTTON = "power_button_pressed"
 
-#: Signals that make noise. `camera_gone` is deliberately absent by default: a bus glitch is more
-#: plausible than a hand on the cable of a built-in camera (spec section 10, item 5).
-SIREN_SIGNALS = frozenset({AC_OFFLINE, LID_CLOSED, SCENE_SHIFT, POWER_BUTTON})
+#: Every signal this module can raise, for validating `tamper.siren_signals`. Which of them
+#: actually make noise is config, not code — see `TamperConfig.siren_signals`.
+ALL_SIGNALS = frozenset({AC_OFFLINE, LID_CLOSED, CAMERA_GONE, SCENE_SHIFT, POWER_BUTTON})
 
 
 @dataclass(frozen=True)
@@ -135,5 +135,36 @@ class TamperMonitor:
         return signal
 
 
-def plays_siren(signals: list[Signal]) -> bool:
-    return any(signal.name in SIREN_SIGNALS for signal in signals)
+def siren_signals(cfg: Config) -> frozenset[str]:
+    """The configured set, with unknown names refused loudly rather than silently ignored.
+
+    A typo here is silence at the moment the trap is meant to scream, and it would never show up
+    in a test of anything else. `preflight` calls this so the mistake surfaces before the trip
+    rather than during it.
+
+    **Raises**, which is why the run loop calls `plays_siren` instead: this is a check, and a
+    check may refuse. Nothing on the path between a tamper signal and the sound may throw.
+    """
+    configured = frozenset(cfg.tamper.siren_signals)
+    unknown = configured - ALL_SIGNALS
+    if unknown:
+        raise ValueError(
+            "unknown tamper.siren_signals: "
+            + ", ".join(sorted(unknown))
+            + " (known: "
+            + ", ".join(sorted(ALL_SIGNALS))
+            + ")"
+        )
+    return configured
+
+
+def plays_siren(cfg: Config, signals: list[Signal]) -> bool:
+    """Whether this batch of signals makes a noise. Deliberately cannot fail.
+
+    A misspelled name here simply never matches — one signal loses its siren. Validating instead
+    would turn that into an exception raised from inside the run loop, on the tamper path, which
+    is how "one signal went quiet" becomes "the trap stopped". `preflight` is where the typo is
+    caught, and it blocks arming.
+    """
+    allowed = frozenset(cfg.tamper.siren_signals)
+    return any(signal.name in allowed for signal in signals)

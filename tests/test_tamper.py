@@ -6,7 +6,7 @@ is the same discipline the external prober uses. USB-C PD ports flap on their ow
 
 import pytest
 
-from camtrap.tamper import Signal, TamperMonitor
+from camtrap.tamper import Signal, TamperMonitor, plays_siren, siren_signals
 
 
 @pytest.fixture
@@ -105,3 +105,50 @@ def test_external_signal_is_debounce_free(monitor):
     fired = monitor.report_external("camera_gone", detail="no frames for 5s", now=1.0)
     assert fired == Signal("camera_gone", "no frames for 5s")
     assert monitor.poll(now=2.0) == []
+
+
+# --- which signals make noise (spec 3.4) --------------------------------------------------------
+
+
+def test_only_the_cable_and_the_lid_sound_the_siren_by_default(cfg):
+    """Narrowed on the owner's instruction after the first hotel run.
+
+    The other three are still detected, still tamper, still alerted — only quiet.
+    """
+    assert plays_siren(cfg, [Signal("ac_offline", "power source went offline")])
+    assert plays_siren(cfg, [Signal("lid_closed", "lid closed")])
+    assert not plays_siren(cfg, [Signal("scene_shift", "scene shifted")])
+    assert not plays_siren(cfg, [Signal("power_button_pressed", "pressed while armed")])
+    assert not plays_siren(cfg, [Signal("camera_gone", "no frames")])
+
+
+def test_one_loud_signal_in_a_batch_is_enough(cfg):
+    """Closing the lid and pulling the cable in one poll must not cancel each other out."""
+    batch = [Signal("scene_shift", ""), Signal("ac_offline", "")]
+    assert plays_siren(cfg, batch)
+
+
+def test_an_empty_set_makes_the_trap_silent_rather_than_broken(cfg):
+    cfg.tamper.siren_signals = []
+    assert not plays_siren(cfg, [Signal("ac_offline", "")])
+
+
+def test_a_typo_in_the_signal_set_is_refused_loudly(cfg):
+    """Silence at the moment the trap is meant to scream is the one failure with no evidence.
+
+    A misspelled name would simply never match, and nothing else in the system would notice.
+    """
+    cfg.tamper.siren_signals = ["ac_offline", "lid_close"]  # missing the d
+    with pytest.raises(ValueError, match="lid_close"):
+        siren_signals(cfg)
+
+
+def test_a_typo_never_throws_on_the_tamper_path(cfg):
+    """Nothing between a tamper signal and the sound may raise.
+
+    `siren_signals` refuses a bad set; `plays_siren` must not, or a misspelled config key would
+    stop being "one signal went quiet" and become "the trap died on the first cable pull".
+    """
+    cfg.tamper.siren_signals = ["ac_offline", "lid_close"]  # missing the d
+    assert plays_siren(cfg, [Signal("ac_offline", "")]) is True
+    assert plays_siren(cfg, [Signal("lid_closed", "")]) is False  # quiet, not fatal

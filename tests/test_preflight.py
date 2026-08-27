@@ -140,3 +140,31 @@ def test_watch_arms_itself_when_paused_and_restores_after(cfg):
 
     modes.watch(cfg, minutes=0.01)
     assert state.read_mode(cfg.root).paused, "the paused state must be put back"
+
+
+# --- the audible policy, stated before the owner walks out ---------------------------------------
+
+
+def test_preflight_states_what_will_and_will_not_make_a_noise(ready_cfg, monkeypatch):
+    """Both halves of this policy were narrowed by hand, so the check says them out loud.
+
+    A trap that is quieter than its owner remembers is worse than one that is louder.
+    """
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (True, "sink"))
+    _ready, rows = modes.preflight(ready_cfg)
+    ok, detail = _rows(rows)["sound policy"]
+    assert ok
+    assert "ac_offline" in detail and "lid_closed" in detail
+    assert "scene_shift" not in detail
+    assert "motion: silent" in detail
+
+
+def test_a_typo_in_the_signal_set_blocks_arming(ready_cfg, monkeypatch):
+    """The one failure with no evidence: silence at the moment the siren was meant to sound."""
+    monkeypatch.setattr(modes, "audio_probe", lambda cfg, restore=False: (True, "sink"))
+    ready_cfg.tamper.siren_signals = ["ac_offline", "lid_close"]  # missing the d
+    ready, rows = modes.preflight(ready_cfg)
+    assert not ready
+    ok, detail = _rows(rows)["sound policy"]
+    assert ok is False
+    assert "lid_close" in detail

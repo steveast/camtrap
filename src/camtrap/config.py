@@ -104,7 +104,11 @@ class DetectorConfig:
 
 @dataclass
 class EventConfig:
-    snapshot_interval_sec: float = 5.0
+    # One frame the moment the event opens, then one every snapshot_interval_sec for as long as
+    # the event stays open. 10 s rather than 5 on the owner's instruction after the first hotel
+    # run: at 5 s with the boost on, a two-minute event produced dozens of near-identical frames
+    # and the album that reached Telegram was six views of the same second.
+    snapshot_interval_sec: float = 10.0
     prebuffer_frames: int = 5
     prebuffer_interval_sec: float = 1.0
     event_gap_sec: float = 30.0
@@ -112,17 +116,29 @@ class EventConfig:
     # 95, not 85: this frame may end up in front of a police officer looking at a face. The extra
     # 120 KB is worth more than the disk it costs.
     jpeg_quality: int = 95
-    # A snapshot every snapshot_interval_sec is right for a curtain twitching for a minute, and
-    # wrong for a person crossing the room in two seconds: they land between frames and the event
-    # ends up documenting the curtain. So a change well above the trigger threshold takes a frame
-    # immediately, subject to its own shorter floor.
-    boost_area_pct: float = 4.0
+    # The boost let a change well above the trigger threshold jump the throttle and take a frame
+    # every boost_min_interval_sec. **0 disables it**, which is the default now: the owner asked
+    # for a plain cadence — one frame at once, then one every snapshot_interval_sec — and the
+    # boost is precisely what turns that cadence into a burst. Set it above 0 to get it back.
+    boost_area_pct: float = 0.0
     boost_min_interval_sec: float = 1.0
     # After a tamper signal the throttle is suspended: whoever pulled the cable or pressed the
     # power button is in the room NOW, and a frame every 5 s is how you end up with a photo of
     # the door closing behind them. One frame a second for ten seconds instead.
     tamper_burst_sec: float = 10.0
     tamper_burst_interval_sec: float = 1.0
+    # --- which frame is THE photo ------------------------------------------------------------
+    # Frames written inside this window after the event opens are kept as evidence but do not
+    # compete to lead the alert. Measured on the hotel event of 26 August: the frame that opened
+    # it showed a back in a doorway at +1 s, and the face arrived at +5 s. The trigger frame is
+    # the one thing a detector is guaranteed to catch late.
+    key_settle_sec: float = 5.0
+    # Mean luma (0-255) outside which a frame shows nothing anyone can use. On that same event the
+    # frames taken before the light came on measured 5.9-14.0 and the lit ones 100-120, so this is
+    # not a fine judgement — and the alert led with a black room because 99 % of its pixels had
+    # changed, which is what a light coming on looks like to a background model.
+    key_min_luma: float = 25.0
+    key_max_luma: float = 245.0
 
 
 @dataclass
@@ -158,7 +174,18 @@ class TamperConfig:
         ]
     )
     camera_gone_is_tamper: bool = True
-    camera_gone_plays_siren: bool = False
+    #: Which signals sound the siren. Everything else still opens a tamper event, still takes the
+    #: burst of frames and still alerts — it just does it quietly.
+    #:
+    #: Narrowed to the two unambiguous ones on the owner's instruction after the first hotel run.
+    #: `scene_shift` and `power_button_pressed` used to be in here; both fired on the owner
+    #: themselves coming back into the room, and an alarm that greets you at the door is an alarm
+    #: you stop arming. `camera_gone` was never in it: a USB glitch is more plausible than a hand
+    #: on the cable of a built-in camera (spec section 10, item 5).
+    #:
+    #: The cost is stated rather than hidden: a press on the power button is the one act that can
+    #: end the trap, and it is now silent. Add "power_button_pressed" back to sound on it.
+    siren_signals: list[str] = field(default_factory=lambda: ["ac_offline", "lid_closed"])
 
 
 @dataclass
@@ -180,6 +207,13 @@ class SoundConfig:
     max_per_event: int = 3
     max_per_hour: int = 10
     # Stage 1 — the spoken warning.
+    #
+    # OFF by default since the first hotel run, on the owner's instruction. The trap keeps both
+    # eyes and its voice — the rendered files stay, `warn-test` still plays them, and one line
+    # flips it back — but nothing speaks on motion any more. A room where the trap talks to
+    # everyone who walks past it is a room where the trap gets switched off, and stage 2 is the
+    # part that has to be believed.
+    warn_on_motion: bool = False
     warn_langs: list[str] = field(default_factory=lambda: ["vi", "en"])
     warn_dir: str = ""  # empty => data_dir()/sounds
     warn_volume_pct: int = 85

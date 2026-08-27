@@ -192,8 +192,13 @@ class Arming:
         if self._started is not None and now - self._started < self.cfg.detector.warmup_sec:
             return False, "warmup"
 
-        if stage is Stage.WARNING and not self.cfg.sound.warn_langs:
-            return False, "no_warn_langs"
+        if stage is Stage.WARNING:
+            # Two separate refusals, because they mean different things to whoever reads the
+            # journal: the policy is off, versus the policy is on and there is nothing to play.
+            if not self.cfg.sound.warn_on_motion:
+                return False, "warning_disabled"
+            if not self.cfg.sound.warn_langs:
+                return False, "no_warn_langs"
 
         unlocked_at = self._unlocked_at
         if unlocked_at is not None and now - unlocked_at < self.cfg.arming.grace_after_unlock_sec:
