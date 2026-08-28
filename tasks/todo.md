@@ -301,3 +301,28 @@ would have guessed. Measured before changing anything.
       oldest pre-buffer frame. The manifest sorts ahead of the frames it names, so it arrives
       naming one that is still uploading and the fallback took the lowest number. Fallback is now
       the newest frame present, and the album follows the key frame with the newest frames.
+
+## First hotel run, 2026-08-26 to 28
+
+Two nights of real use. Everything here came from watching what the trap actually did, not from
+the plan; all of it is closed except the one line that needs the Pi.
+
+- [x] **Both sirens fired at the owner** — coming back in is motion, picking your own laptop up is
+      `scene_shift`. Stage 1 off (`warn_on_motion = false`), siren narrowed to `ac_offline` and
+      `lid_closed`, everything else quiet. Stated cost: a power-button press is now silent.
+- [x] **The alert led with a photograph of darkness.** A light coming on changes ~99 % of the
+      pixels, so the transition frame won on raw change and it is the one frame where the sensor
+      is still black. `key_frame` is now scored on what a frame is worth as a photograph.
+- [x] **A six-photo album was six views of one second.** Cadence is a frame at once, then one
+      every 10 s; the boost that jumped the throttle is disabled.
+- [x] **The shutter clicks on capture**, taking over from the voice: one click per frame written,
+      never interrupting, on the siren's arming gate.
+- [ ] **Deploy the poller change to the Pi** — `SEND_ORIGINAL=0` (one message per event instead of
+      an album plus a duplicate document). The repository has it; `/usr/local/bin/camtrap-poll.sh`
+      on the Pi does not, and the Pi is only reachable from the home network:
+
+          scp deploy/pi/camtrap-poll.sh pi:/tmp/
+          ssh pi 'sudo install -m 755 -o root -g root /tmp/camtrap-poll.sh /usr/local/bin/camtrap-poll.sh'
+
+      Until then every event still arrives as an album plus the uncompressed original. Nothing is
+      broken by the delay — it is one extra message per event.
