@@ -1,9 +1,10 @@
 # camtrap — specification
 
-A camera trap running on a laptop: motion detection through the built-in webcam, a snapshot
-every ~5 s while motion lasts, immediate off-box upload, and a Telegram alert with the photo.
-Sound escalates in two stages — a spoken warning in the local language when someone is in the
-room, a police siren when the laptop itself is picked up.
+A camera trap running on a laptop: motion detection through the built-in webcam, a snapshot at
+once and then every 10 s while a visit lasts, immediate off-box upload, and a Telegram alert with
+the photo. Sound is a camera-shutter click on every frame taken, and a police siren when the
+laptop itself is unplugged or its lid is closed. A spoken warning in the local language is built
+and shipped but switched off — see 3.4 for why the audible policy narrowed to this.
 
 Status: phase 1 implemented (see `tasks/todo.md` for what is left, all of it physical).
 Specification date: 2026-08-19.
@@ -316,11 +317,26 @@ instruction after using the trap for a night:
 
 | | |
 |---|---|
-| `WARN_ON_MOTION = false` | **Stage 1 never plays.** Motion is photographed and alerted, in silence. |
+| `WARN_ON_MOTION = false` | **Stage 1 never plays.** No voice, in any language. |
 | `SIREN_SIGNALS = ["ac_offline", "lid_closed"]` | Only the cable and the lid scream. `scene_shift`, `power_button_pressed` and `camera_gone` still open a tamper event, still take the burst of frames and still alert — quietly. |
+| `SHUTTER_ON_CAPTURE = true` | **What replaced the voice.** A 0.3 s camera-shutter click on every frame the trap actually writes — at the shipped cadence, one every 10 s for as long as someone is in frame. |
 
-The reason is the same for both, and it is the reason stage 1 existed in the first place, applied
-one turn further: **the owner is the person most likely to set this off.** Coming back into the
+The click is what remains of stage 1, and keeping it while dropping the voice is the point rather
+than a compromise. A voice argues: it addresses the person, in a language they may not speak, and
+it asks the room to have an opinion about the laptop. A shutter only reports a fact, in no
+language, and is over before anyone decides how to feel about it — housekeeping hears a camera and
+carries on, which is exactly the outcome the spoken warning was aiming at and kept overshooting.
+It also costs nothing to be wrong: a click at a curtain is a click, where a voice at a curtain is
+an incident.
+
+Three rules keep it from becoming its own kind of noise. It follows **frames written, not motion
+seen**, so the cadence governs it and a throttled frame is silent. It **never interrupts** — if
+anything louder is playing it yields rather than queueing, so a click can neither cut a siren short
+nor arrive late announcing a photograph from a minute ago. And it obeys the **same arming gate**
+as the siren, so the trap does not click at its owner sitting at the desk.
+
+The reason for the rest is the same for both, and it is the reason stage 1 existed in the first
+place, applied one turn further: **the owner is the person most likely to set this off.** Coming back into the
 room is motion; picking the laptop up to put it in a bag is `scene_shift`; reaching for the power
 button to stop the noise is `power_button_pressed`. A trap that shouts at its owner at the door
 every evening is a trap that stops being armed, and an unarmed trap protects nothing. Frames cost
@@ -509,8 +525,13 @@ after: a trap running on battery with mute still set looks like it works and doe
 
 Cron every 2 minutes, in the style and discipline of the owner's external prober:
 
-- Pulls the list of new events from the VPS and sends the first frame to Telegram with a caption
+- Pulls the list of new events from the VPS and sends the key frame to Telegram with a caption
   (local time, event type, frame count); the remaining frames follow as an album.
+- **One message per event.** The key frame also used to go a second time as an uncompressed
+  document, since Telegram re-encodes photos — dropped 2026-08-28 (`SEND_ORIGINAL = 0`): it
+  doubled the traffic per event for a copy nobody opens on a phone. Nothing is lost by it. The
+  untouched 1080p/q95 frame stays on the receiver and in the MEGA warehouse, which is where an
+  evidence-grade copy would be fetched from anyway; Telegram was only ever the notification.
 - A `tamper` event → 🚨 as its own message ahead of the queue: the key frame, the list of signals
   that fired, local time, and whether the siren played.
 - A `tamper` event carrying `power_button_pressed` gets **its own wording**: 🆘 and "POWER BUTTON

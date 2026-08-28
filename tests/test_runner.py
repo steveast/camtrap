@@ -20,12 +20,32 @@ class Spawned(list):
         self.append(proc)
         return proc
 
+    #: Set by the fixtures, so `played_siren` can ask what actually fired.
+    runner = None
+
     def played(self, needle):
         return any(needle in " ".join(p.argv) for p in self)
 
+    def played_shutter(self):
+        return self.played("shutter.ogg")
+
+    def shutters(self):
+        return [p for p in self if "shutter.ogg" in " ".join(p.argv)]
+
+    def advance(self, now):
+        """Move every spawned process's clock. Real time ends a real `pw-play`; this ends these,
+        and without it the first sound of a test blocks every later one as `busy`."""
+        for proc in self:
+            proc.advance(now)
+
     def played_siren(self):
-        """The siren stage started. Its first file is the shutter click, by design."""
-        return self.played("shutter.ogg") or self.played("siren.ogg")
+        """Whether the SIREN STAGE fired — not a file check any more.
+
+        `shutter.ogg` used to imply the alarm, because the only thing that played it was the
+        siren leading with a click. It now also stands alone as the click on every captured
+        frame, so the file no longer identifies the stage and the runner's own count does.
+        """
+        return self.runner is not None and self.runner.stats.sirens > 0
 
 
 @pytest.fixture
@@ -60,6 +80,7 @@ def wired(cfg, sysfs):
         clock=lambda: 0.0,
     )
     runner.spawned = spawned
+    spawned.runner = runner
     return runner, sysfs, session, runner_cmds
 
 
@@ -193,14 +214,15 @@ def framed(wired):
     return runner, blank, cmds
 
 
-def test_motion_in_frame_is_recorded_silently(framed):
-    """The whole camera path with the shipped sound policy: evidence, no noise."""
+def test_motion_in_frame_is_photographed_with_a_click_and_nothing_else(framed):
+    """The whole camera path under the shipped sound policy: a shutter, no voice, no alarm."""
     runner, blank, cmds = framed
     for index in range(6):
         frame = blank()
         frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
         runner.on_frame(frame, now=70.0 + index * 0.2)
     assert runner.stats.motion_events >= 1  # seen and written
+    assert runner.spawned.played_shutter(), "a frame was taken; it must be audible as one"
     assert runner.stats.warnings == 0
     assert not runner.spawned.played("warn-vi.ogg")
     assert not runner.spawned.played_siren()
@@ -235,7 +257,7 @@ def _lift_the_case(runner):
     runner.on_frame(np.roll(texture, 60, axis=1), now=110.0)
 
 
-def test_a_lifted_case_is_recorded_but_no_longer_sounds(framed):
+def test_a_lifted_case_is_recorded_but_no_longer_sounds_the_siren(framed):
     """`scene_shift` left the siren set on the owner's instruction.
 
     It fired on the owner themselves walking back in — the camera sees the room change, not who
@@ -247,6 +269,7 @@ def test_a_lifted_case_is_recorded_but_no_longer_sounds(framed):
     assert "scene_shift" in runner.stats.signals
     assert runner.stats.tamper_events >= 1
     assert not runner.spawned.played_siren()
+    assert runner.spawned.played_shutter()  # the frames were still taken, and still say so
 
 
 def test_a_lifted_case_sounds_the_siren_when_the_signal_is_configured_to(framed):
@@ -258,10 +281,92 @@ def test_a_lifted_case_sounds_the_siren_when_the_signal_is_configured_to(framed)
     assert cmds.ran("lock-session")
 
 
-def test_a_light_switch_makes_no_sound_by_default(framed):
+# --- the shutter: one click per frame actually taken ---------------------------------------------
+
+
+def _drive(runner, frame, now):
+    """One iteration of the real loop, as `pump` runs it: a frame, then a step.
+
+    The step is what runs `hold_tick`, which is what notices a finished player — so a test that
+    only calls `on_frame` leaves the first sound playing forever and every later one is refused
+    as `busy`.
+    """
+    runner.spawned.advance(now)
+    runner.on_frame(frame, now)
+    runner.step(now)
+
+
+def test_the_click_follows_the_cadence_not_the_frame_rate(framed):
+    """Frames arrive five times a second and are written once every ten. Clicks follow writes.
+
+    This is the whole reason the click hangs off the writer's frame counter rather than off the
+    detector's verdict: motion is continuous, photography is not.
+    """
+    runner, blank, _cmds = framed
+    for index in range(150):  # 30 s of continuous motion at 5 fps
+        frame = blank()
+        frame[120:260, 100 + (index % 8) * 25 : 230 + (index % 8) * 25] = 210
+        _drive(runner, frame, 70.0 + index * 0.2)
+    clicks = len(runner.spawned.shutters())
+    # One when the event opens, then one per 10 s slot. Nowhere near one per frame.
+    assert 2 <= clicks <= 5, f"expected a handful of clicks over 30 s, got {clicks}"
+
+
+def test_a_frame_the_throttle_refused_makes_no_sound(framed):
+    """The click reports a photograph, so there has to have been a photograph."""
+    runner, blank, _cmds = framed
+    frame = blank()
+    frame[120:260, 100:230] = 210
+    _drive(runner, frame, 70.0)
+    before = len(runner.spawned.shutters())
+    assert before >= 1
+    # Well inside the 10 s throttle: frames keep arriving, none is written, nothing clicks.
+    for index in range(1, 10):
+        _drive(runner, frame, 70.0 + index * 0.2)
+    assert len(runner.spawned.shutters()) == before
+
+
+def test_the_click_never_interrupts_the_siren(framed):
+    """A click that cut the alarm short to announce a photograph would be an own goal."""
+    runner, blank, _cmds = framed
+    runner.cfg.tamper.siren_signals = ["ac_offline", "lid_closed", "scene_shift"]
+    _lift_the_case(runner)
+    assert runner.spawned.played_siren()
+    playing = runner.responder.playing
+    assert playing is not None
+    # The tamper burst writes a frame a second while the siren runs. Not one of them may cut in,
+    # and the refusal has to be the shutter yielding rather than the fake never finishing.
+    for index in range(1, 6):
+        runner.on_frame(blank(90), now=111.0 + index)
+        assert runner.responder.playing is playing, "the siren was cut short by a shutter click"
+
+
+def test_an_unarmed_room_is_not_photographed_out_loud(wired):
+    """The gate that holds the siren holds the click too: no clicking at the owner's desk."""
+    runner, _sysfs, session, _cmds = wired
+    session.locked = False  # the owner is sitting here
+    runner.step(0.0)
+    result = runner.responder.on_capture(now=1.0)
+    assert not result.played
+    assert not runner.spawned.played_shutter()
+
+
+def test_the_click_can_be_switched_off(framed):
+    runner, blank, _cmds = framed
+    runner.cfg.sound.shutter_on_capture = False
+    frame = blank()
+    frame[120:260, 100:230] = 210
+    runner.on_frame(frame, now=70.0)
+    assert runner.stats.motion_events >= 1  # still photographed
+    assert not runner.spawned.played_shutter()
+
+
+def test_a_light_switch_raises_no_alarm_but_is_still_photographed(framed):
+    """A light event is one frame, and a frame taken is a frame announced. Nothing more."""
     runner, blank, _cmds = framed
     runner.on_frame(blank(215), now=100.0)
     assert runner.stats.light_events == 1
+    assert runner.spawned.played_shutter()
     assert not runner.spawned.played_siren()
     assert not runner.spawned.played("warn-vi.ogg")
 

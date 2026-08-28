@@ -192,6 +192,9 @@ class Arming:
         if self._started is not None and now - self._started < self.cfg.detector.warmup_sec:
             return False, "warmup"
 
+        if stage is Stage.SHUTTER and not self.cfg.sound.shutter_on_capture:
+            return False, "shutter_disabled"
+
         if stage is Stage.WARNING:
             # Two separate refusals, because they mean different things to whoever reads the
             # journal: the policy is off, versus the policy is on and there is nothing to play.

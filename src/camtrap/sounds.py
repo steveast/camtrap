@@ -18,7 +18,8 @@ def missing_sounds(cfg: Config) -> list[str]:
     missing: list[str] = []
     if not cfg.siren_path.exists():
         missing.append("siren")
-    if cfg.sound.shutter_before_siren and not cfg.shutter_path.exists():
+    wants_shutter = cfg.sound.shutter_before_siren or cfg.sound.shutter_on_capture
+    if wants_shutter and not cfg.shutter_path.exists():
         missing.append("shutter")
     for lang in cfg.sound.warn_langs:
         if not cfg.warn_path(lang).exists():

@@ -33,6 +33,10 @@ from .config import Config
 
 
 class Stage(Enum):
+    #: A 0.3 s click on every frame the trap takes. Not a stage in the escalation sense — it
+    #: neither warns nor threatens, it reports that a photograph was just made — but it shares
+    #: the audio path, the arming gate and the hold layer, so it is one of these.
+    SHUTTER = "shutter"
     WARNING = "warning"
     SIREN = "siren"
 
@@ -257,6 +261,7 @@ class SoundResponder:
         self._hold_last = 0.0
         self._last_warn = float("-inf")
         self._last_siren = float("-inf")
+        self._last_shutter = float("-inf")
         self._siren_this_event = 0
         self._siren_times: deque[float] = deque()
         self._warn_times: deque[float] = deque()
@@ -277,6 +282,10 @@ class SoundResponder:
         self._siren_this_event = 0
 
     # --- stages --------------------------------------------------------------
+
+    def on_capture(self, *, now: float) -> Played:
+        """A frame was just written. Click, unless something louder is already speaking."""
+        return self._respond(Stage.SHUTTER, now=now, signals=[])
 
     def on_motion(self, *, now: float) -> Played:
         return self._respond(Stage.WARNING, now=now, signals=[])
@@ -306,7 +315,10 @@ class SoundResponder:
             return Played(stage=stage, played=False, reason="missing_file")
 
         confirmed = False
-        if self._ack is not None:
+        if self._ack is not None and stage is not Stage.SHUTTER:
+            # "Evidence first" buys the siren up to delay_max_sec of upload before it sounds. The
+            # shutter must not pay it: this runs on the capture path, once per frame, and blocking
+            # the loop for three seconds to earn a 0.3 s click would cost frames to make a noise.
             confirmed = bool(self._ack(self.cfg.sound.delay_max_sec))
 
         if stage is Stage.SIREN and not self.cfg.sound.dry_run:
@@ -315,9 +327,7 @@ class SoundResponder:
                 self._run([*self.cfg.sound.loginctl_cmd, "lock-session"])
 
         self._last_skip = None
-        volume = (
-            self.cfg.sound.volume_pct if stage is Stage.SIREN else self.cfg.sound.warn_volume_pct
-        )
+        volume = self._volume(stage)
 
         if self.cfg.sound.dry_run:
             # Everything above ran for real — the gate, the limits, the file check — so the log
@@ -360,6 +370,9 @@ class SoundResponder:
     # --- playback ------------------------------------------------------------
 
     def _files(self, stage: Stage) -> list[PlayCall] | None:
+        if stage is Stage.SHUTTER:
+            path = self.cfg.shutter_path
+            return [PlayCall(str(path), lang="shutter")] if path.exists() else None
         if stage is Stage.SIREN:
             path = self.cfg.siren_path
             if not path.exists():
@@ -399,9 +412,12 @@ class SoundResponder:
             return False
         call = self._queue.pop(0)
         # The duration doubles as a kill timeout: a hung pw-play must not hold the stage.
-        duration = (
-            self.cfg.sound.siren_sec if stage is Stage.SIREN else self.cfg.sound.warn_timeout_sec
-        )
+        if stage is Stage.SIREN:
+            duration = self.cfg.sound.siren_sec
+        elif stage is Stage.SHUTTER:
+            duration = self.cfg.sound.shutter_timeout_sec
+        else:
+            duration = self.cfg.sound.warn_timeout_sec
         argv = list(self.cfg.sound.player_cmd)
         sink = self.audio.sink
         if sink:
@@ -435,18 +451,29 @@ class SoundResponder:
             return False
         if (now - self._hold_last) * 1000.0 < self.cfg.sound.hold_poll_ms:
             return False
-        volume = (
-            self.cfg.sound.volume_pct
-            if self._playing_stage is Stage.SIREN
-            else self.cfg.sound.warn_volume_pct
-        )
-        self.audio.reassert(volume_pct=volume)
+        self.audio.reassert(volume_pct=self._volume(self._playing_stage))
         self._hold_last = now
         return True
 
     # --- limits --------------------------------------------------------------
 
+    def _volume(self, stage: Stage | None) -> int:
+        if stage is Stage.SIREN:
+            return self.cfg.sound.volume_pct
+        if stage is Stage.SHUTTER:
+            return self.cfg.sound.shutter_volume_pct
+        return self.cfg.sound.warn_volume_pct
+
     def _limit_reason(self, stage: Stage, now: float, signals: list[str] | None = None) -> str:
+        if stage is Stage.SHUTTER:
+            # The shutter never interrupts. Everything else here is louder and means more, and a
+            # click that cut a siren short to announce a photograph would be an own goal — so it
+            # yields rather than queueing, and the frame is written either way.
+            if self._proc is not None and self._proc.poll() is None:
+                return "busy"
+            if now - self._last_shutter < self.cfg.sound.shutter_min_interval_sec:
+                return "min_interval"
+            return ""
         if stage is Stage.SIREN:
             # A new KIND of interference is a new alarm. Closing the lid and then pulling the
             # cable used to leave the second one silent for a minute, which is exactly the
@@ -476,6 +503,9 @@ class SoundResponder:
         return len(times)
 
     def _record(self, stage: Stage, now: float, signals: list[str] | None = None) -> None:
+        if stage is Stage.SHUTTER:
+            self._last_shutter = now
+            return
         if stage is Stage.SIREN:
             self._last_siren = now
             self._siren_this_event += 1

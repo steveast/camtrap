@@ -198,6 +198,21 @@ class SoundConfig:
     # language: it says "you have just been photographed", and only then does the alarm start.
     shutter_before_siren: bool = True
     shutter_file: str = ""  # empty => data_dir()/sounds/shutter.ogg
+    # --- the click on every frame the trap takes ---------------------------------------------
+    # The same 0.3 s click, now on capture rather than only ahead of the alarm. This is what the
+    # spoken warning used to be and is not any more: a notice that says "you are being
+    # photographed" — but in no language, at conversational volume, over in a third of a second.
+    # A voice argues with the person in the room; a shutter only reports a fact, which is why it
+    # survived the cut that took stage 1 out.
+    #
+    # At the shipped cadence this is one click every 10 s for as long as someone is in frame.
+    shutter_on_capture: bool = True
+    shutter_volume_pct: int = 85
+    # Floor between two clicks. The cadence already spaces them 10 s apart; this exists for the
+    # tamper burst, which writes a frame a second and would otherwise machine-gun the room.
+    shutter_min_interval_sec: float = 2.0
+    # Kill timeout for a hung player on a 0.3 s file. Nothing should ever reach it.
+    shutter_timeout_sec: float = 3.0
     volume_pct: int = 100
     cooldown_sec: float = 60.0
     # The cooldown is per signal, not global: closing the lid and then pulling the cable are two

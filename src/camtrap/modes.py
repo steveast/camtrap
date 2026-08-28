@@ -89,7 +89,8 @@ def preflight(
     try:
         allowed = sorted(tamper_mod.siren_signals(cfg))
         policy_detail = f"siren: {', '.join(allowed) or 'nothing'}"
-        policy_detail += "; motion: " + ("warning" if cfg.sound.warn_on_motion else "silent")
+        policy_detail += "; capture: " + ("click" if cfg.sound.shutter_on_capture else "silent")
+        policy_detail += "; voice: " + ("on motion" if cfg.sound.warn_on_motion else "off")
         rows.append(("sound policy", bool(allowed), policy_detail))
     except ValueError as exc:
         rows.append(("sound policy", False, str(exc)))

@@ -89,6 +89,11 @@ class Runner:
         self._last_frame: np.ndarray | None = None
         self._burst_until = float("-inf")
         self._camera_gone_reported = False
+        #: Frames already answered with a shutter click. Compared against the writer's running
+        #: total rather than hooked into each call site: frames are written from four places
+        #: (the pre-buffer, the trigger, the throttle, the tamper burst) and a click owed from
+        #: any of them is the same click.
+        self._clicked_frames = 0
         self.responder.set_ack_waiter(self._await_evidence)
         self._power_grab: object | None = None
         self.responder.set_gate(self.arming.gate)
@@ -185,8 +190,21 @@ class Runner:
         self.stats.ticks += 1
         if signals:
             self._tamper(signals, now=now)
+            self._click_if_photographed(now)
         self._housekeeping(now)
         return signals
+
+    def _click_if_photographed(self, now: float) -> None:
+        """A shutter click for the frames just written, at most one per pass.
+
+        The marker advances even when the click is refused — busy, too soon, not armed. A backlog
+        of owed clicks would arrive as a burst of clicks after the siren stops, announcing
+        photographs taken a minute ago.
+        """
+        if self.events.frames_total == self._clicked_frames:
+            return
+        self._clicked_frames = self.events.frames_total
+        self.responder.on_capture(now=now)
 
     def motion(self, now: float) -> None:
         """Stage 1: someone is in the room."""
@@ -261,6 +279,7 @@ class Runner:
         else:
             self.events.feed(frame, now=now, changed_pct=detection.changed_pct)
 
+        self._click_if_photographed(now)
         closed = self.events.maybe_close(now=now)
         if closed is not None:
             self.responder.end_event()

@@ -156,7 +156,8 @@ def test_preflight_states_what_will_and_will_not_make_a_noise(ready_cfg, monkeyp
     assert ok
     assert "ac_offline" in detail and "lid_closed" in detail
     assert "scene_shift" not in detail
-    assert "motion: silent" in detail
+    assert "capture: click" in detail
+    assert "voice: off" in detail
 
 
 def test_a_typo_in_the_signal_set_blocks_arming(ready_cfg, monkeypatch):

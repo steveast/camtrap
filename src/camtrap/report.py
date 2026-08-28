@@ -32,8 +32,10 @@ class Summary:
     tamper_signals: Counter = field(default_factory=Counter)
     sirens: int = 0
     warnings: int = 0
+    shutters: int = 0
     would_sirens: int = 0
     would_warnings: int = 0
+    would_shutters: int = 0
     refusals: Counter = field(default_factory=Counter)
     holds: Counter = field(default_factory=Counter)
     drops: int = 0
@@ -44,13 +46,38 @@ class Summary:
 
     @property
     def noise(self) -> int:
-        """Anything audible. In an empty room this must be zero."""
-        return self.sirens + self.warnings
+        """Anything audible. In an empty room this must be zero.
+
+        Shutter clicks count. They are quieter and shorter than the rest, but the empty-room
+        criterion asks whether the trap reacted to nothing at all, and a click is a reaction —
+        leaving it out would let a curtain photograph itself all afternoon and still report
+        CLEAN.
+        """
+        return self.sirens + self.warnings + self.shutters
 
     @property
     def would_have_sounded(self) -> int:
         """What an observation run suppressed. For an empty room this must be zero too."""
-        return self.would_sirens + self.would_warnings
+        return self.would_sirens + self.would_warnings + self.would_shutters
+
+
+def _count_sound(summary: Summary, stage: str | None, *, suppressed: bool) -> None:
+    """Three stages, counted apart. `else -> warning` used to be safe when there were only two;
+    it now silently files every shutter click as a spoken warning."""
+    if stage == "siren":
+        if suppressed:
+            summary.would_sirens += 1
+        else:
+            summary.sirens += 1
+    elif stage == "shutter":
+        if suppressed:
+            summary.would_shutters += 1
+        else:
+            summary.shutters += 1
+    elif suppressed:
+        summary.would_warnings += 1
+    else:
+        summary.warnings += 1
 
 
 def summarise(lines: Iterable[str]) -> Summary:
@@ -71,15 +98,9 @@ def summarise(lines: Iterable[str]) -> Summary:
         elif record == "tamper":
             summary.tamper_signals[fields.get("signal", "?")] += 1
         elif record == "sound":
-            if fields.get("stage") == "siren":
-                summary.sirens += 1
-            else:
-                summary.warnings += 1
+            _count_sound(summary, fields.get("stage"), suppressed=False)
         elif record == "sound_would_play":
-            if fields.get("stage") == "siren":
-                summary.would_sirens += 1
-            else:
-                summary.would_warnings += 1
+            _count_sound(summary, fields.get("stage"), suppressed=True)
         elif record == "sound_skip":
             summary.refusals[fields.get("reason", "?")] += 1
         elif record == "sound_hold":
@@ -117,12 +138,14 @@ def render(summary: Summary, *, source: str) -> str:
     lines.append("")
     lines.append(f"sirens played       {summary.sirens}")
     lines.append(f"warnings played     {summary.warnings}")
+    lines.append(f"shutter clicks      {summary.shutters}")
     lines.append(f"AUDIBLE TOTAL       {summary.noise}   <- must be 0 for an empty room")
-    if summary.would_have_sounded or summary.would_sirens or summary.would_warnings:
+    if summary.would_have_sounded:
         lines.append("")
         lines.append("observation mode — suppressed, but would have sounded:")
         lines.append(f"  sirens           {summary.would_sirens}")
         lines.append(f"  warnings         {summary.would_warnings}")
+        lines.append(f"  shutter clicks   {summary.would_shutters}")
         lines.append(
             f"  WOULD HAVE FIRED {summary.would_have_sounded}   <- must be 0 for an empty room"
         )

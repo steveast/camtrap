@@ -60,6 +60,10 @@ class EventWriter:
         self._ring: deque[tuple[float, np.ndarray]] = deque(maxlen=cfg.event.prebuffer_frames)
         self._ring_last = float("-inf")
         self.active: Event | None = None
+        #: Every frame this writer has ever put on disk, across all events. The run loop watches
+        #: it to know a photograph was really taken: the shutter clicks on the fact, not on the
+        #: intention, so a frame the throttle or the cap refused makes no sound.
+        self.frames_total = 0
         self._wall = wall_clock or __import__("time").time
         self._used_ids: set[str] = set()
 
@@ -278,6 +282,7 @@ class EventWriter:
             log.emit("frame_error", id=event.event_id, index=index)
             return
         event.frames_written = index + 1
+        self.frames_total += 1
         score = self._key_score(event, frame, now=now, changed_pct=changed_pct)
         if score > event.key_score:
             event.key_score = score

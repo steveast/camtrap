@@ -91,3 +91,37 @@ def test_a_missing_log_is_not_an_error(tmp_path):
     summary, source = report.from_file(tmp_path / "nope.log")
     assert summary.runs == 0
     assert "missing" in source
+
+
+def test_a_shutter_click_is_not_filed_as_a_spoken_warning():
+    """Three stages now, and the parser's `else -> warning` branch used to be safe with two."""
+    summary = report.summarise(
+        [
+            "sound stage=shutter files=1 volume=85 signals=- evidence=0",
+            "sound stage=shutter files=1 volume=85 signals=- evidence=0",
+            "sound stage=warning files=2 volume=85 signals=- evidence=1",
+            "sound stage=siren files=2 volume=100 signals=ac_offline evidence=0",
+        ]
+    )
+    assert summary.shutters == 2
+    assert summary.warnings == 1
+    assert summary.sirens == 1
+
+
+def test_clicks_count_towards_the_empty_room_verdict():
+    """A curtain photographing itself all afternoon is not a CLEAN empty room."""
+    summary = report.summarise(["sound stage=shutter files=1 volume=85 signals=- evidence=0"])
+    assert summary.noise == 1
+
+
+def test_suppressed_clicks_are_reported_apart_too():
+    summary = report.summarise(
+        [
+            "sound_would_play stage=shutter files=1 volume=85 signals=-",
+            "sound_would_play stage=siren files=2 volume=100 signals=lid_closed",
+        ]
+    )
+    assert summary.would_shutters == 1
+    assert summary.would_warnings == 0
+    assert summary.would_have_sounded == 2
+    assert "shutter clicks   1" in report.render(summary, source="x")

@@ -32,9 +32,13 @@ MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
 # pre-buffer frame — an empty room seconds before anything happened — so the manifest's key_frame
 # leads, and the rest follow as an album. 1 disables the album.
 ALBUM_MAX="${ALBUM_MAX:-6}"
-# Telegram re-encodes photos. The key frame is therefore ALSO sent as a document, which keeps the
-# original 1080p/q95 pixels — the copy that would be shown to police. 0 disables it.
-SEND_ORIGINAL="${SEND_ORIGINAL:-1}"
+# Telegram re-encodes photos, so the key frame used to ALSO go as a document keeping the original
+# 1080p/q95 pixels. **Off by default since 2026-08-28, on the owner's instruction**: it doubled the
+# messages per event for a copy nobody opened on a phone, and the original was never at risk — the
+# untouched frame sits on the receiver and in the MEGA warehouse, which is where it would be
+# fetched from if it were ever needed as evidence. Telegram was only ever the notification. Set to
+# 1 to bring it back.
+SEND_ORIGINAL="${SEND_ORIGINAL:-0}"
 SUMMARY_MIN_SEC="${SUMMARY_MIN_SEC:-3600}"
 TZ_LOCAL="${CAMTRAP_TZ:-Asia/Ho_Chi_Minh}"
 
