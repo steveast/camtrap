@@ -9,7 +9,13 @@
 set -eu
 
 CONF="${CAMTRAP_POLL_ENV:-/etc/camtrap-poll.env}"
-[ -f "$CONF" ] && . "$CONF"
+# `if`, not `[ -f x ] && . x`: this script runs under `set -eu`, where that one-liner *exits*
+# whenever the file is absent — status 1, no output, before the `:?` checks below ever get to say
+# which variable is missing. A renamed env file would look like a poller that simply stopped.
+if [ -f "$CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$CONF"
+fi
 
 : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN missing}"
 : "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID missing}"

@@ -27,6 +27,25 @@ STATE="$CAMTRAP_ROOT/state"
 API="${CAMTRAP_TG_API:-https://api.telegram.org}"
 CURL_MAX_TIME="${CAMTRAP_CURL_MAX_TIME:-30}"
 
+# Optional overrides, because the Pi is not always reachable.
+#
+# What gets sent is the poller's decision, and the poller lives on the Pi — which answers only
+# from the home network. When that decision has to change while the owner is abroad, there is
+# nowhere else to change it but here: this box is the one both ends can always reach. So the
+# relay can decline a verb the caller still asks for. Deliberately narrow — it can only turn
+# something OFF, never send anything the Pi did not ask for.
+# `${HOME:-...}`, because a forced command inherits almost no environment and `set -u` would
+# abort on an unset HOME before the first verb ever ran.
+CAMTRAP_TG_ENV="${CAMTRAP_TG_ENV:-${HOME:-/nonexistent}/.config/camtrap-tg.env}"
+# `if`, not `[ -f x ] && . x`: under `set -e` that one-liner exits the script whenever the file
+# is absent, which is the normal case.
+if [ -f "$CAMTRAP_TG_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$CAMTRAP_TG_ENV"
+fi
+# 1 relays the uncompressed original, 0 accepts the request and drops it.
+SEND_DOC="${SEND_DOC:-1}"
+
 log() { logger -t camtrap-tg "$*" 2>/dev/null || echo "camtrap-tg $*" >&2; }
 die() { log "reject reason=$1 detail=${2:-}"; echo "error $1" >&2; exit 1; }
 
@@ -99,6 +118,18 @@ case "$verb" in
         [ "$argc" -eq 2 ] || die bad_arity "$argc"
         valid_name "$name" || die bad_name "$name"
         [ -f "$INBOX/$name" ] || die missing "$name"
+        if [ "$SEND_DOC" != "1" ]; then
+            # Drain stdin first. The caller is halfway through `printf ... | ssh`, and exiting
+            # without reading hands it EPIPE — which it would report as a failed send and retry
+            # on every tick, turning a suppressed message into a permanent error.
+            cat >/dev/null
+            # Success, not failure: the caller asked for something this box declines to do, and
+            # the frame it names is safe here and in the warehouse either way. Saying "no" would
+            # only produce an alert about a message nobody wanted.
+            log "tick verb=send-doc name=$name skipped=1 reason=send_doc_disabled"
+            echo "ok send-doc $name skipped"
+            exit 0
+        fi
         IFS= read -r token || die no_token
         IFS= read -r chat || die no_chat
         caption=$(cat)

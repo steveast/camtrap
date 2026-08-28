@@ -154,3 +154,88 @@ def test_traversal_and_unknown_verbs_are_refused(root):
     ):
         result = _run(root, command, b"x")
         assert result.returncode != 0, command
+
+
+# --- declining a verb from the receiver side -----------------------------------------------------
+
+
+def _run_with_env(root, command, payload, api_base, env_file):
+    env = {
+        "SSH_ORIGINAL_COMMAND": command,
+        "CAMTRAP_ROOT": str(root),
+        "PATH": "/usr/bin:/bin",
+        "CAMTRAP_TG_API": api_base,
+        "CAMTRAP_TG_ENV": str(env_file),
+    }
+    return subprocess.run(
+        ["sh", str(SCRIPT)], input=payload, capture_output=True, env=env, check=False
+    )
+
+
+def test_send_doc_relays_the_original_by_default(root, api, tmp_path):
+    server, handler = api
+    result = _run_with_env(
+        root,
+        "send-doc evt_20260820T101010Z_000.jpg",
+        b"SECRET\n42\noriginal\n",
+        f"http://127.0.0.1:{server.server_port}",
+        tmp_path / "absent.env",
+    )
+    assert result.returncode == 0
+    assert result.stdout.startswith(b"ok send-doc")
+    assert handler.requests[-1]["path"] == "/botSECRET/sendDocument"
+
+
+def test_send_doc_can_be_declined_here_when_the_pi_cannot_be_reached(root, api, tmp_path):
+    """The poller decides what to send, and the poller is only reachable from home.
+
+    So the relay can decline. The caller is told `ok`: it asked for something this box does not
+    do, the frame is safe here regardless, and an error would only raise an alert about a message
+    nobody wanted.
+    """
+    server, handler = api
+    env_file = tmp_path / "camtrap-tg.env"
+    env_file.write_text("SEND_DOC=0\n")
+    result = _run_with_env(
+        root,
+        "send-doc evt_20260820T101010Z_000.jpg",
+        b"SECRET\n42\noriginal\n",
+        f"http://127.0.0.1:{server.server_port}",
+        env_file,
+    )
+    assert result.returncode == 0
+    assert b"skipped" in result.stdout
+    assert not handler.requests, "nothing may reach Telegram"
+    assert b"SECRET" not in result.stdout + result.stderr
+
+
+def test_declining_still_reads_the_caller_out(root, api, tmp_path):
+    """Exiting without draining stdin gives the caller EPIPE, which it retries forever."""
+    server, _handler = api
+    env_file = tmp_path / "camtrap-tg.env"
+    env_file.write_text("SEND_DOC=0\n")
+    big = b"SECRET\n42\n" + b"x" * 200_000
+    result = _run_with_env(
+        root,
+        "send-doc evt_20260820T101010Z_000.jpg",
+        big,
+        f"http://127.0.0.1:{server.server_port}",
+        env_file,
+    )
+    assert result.returncode == 0
+
+
+def test_the_switch_cannot_turn_anything_on(root, api, tmp_path):
+    """It may only decline. A relay that could be told to send more would be a worse thing."""
+    server, handler = api
+    env_file = tmp_path / "camtrap-tg.env"
+    env_file.write_text("SEND_DOC=0\n")
+    result = _run_with_env(
+        root,
+        "send-photo evt_20260820T101010Z_000.jpg",
+        b"SECRET\n42\ncaption\n",
+        f"http://127.0.0.1:{server.server_port}",
+        env_file,
+    )
+    assert result.returncode == 0
+    assert handler.requests[-1]["path"] == "/botSECRET/sendPhoto"

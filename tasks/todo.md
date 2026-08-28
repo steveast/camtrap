@@ -317,12 +317,28 @@ the plan; all of it is closed except the one line that needs the Pi.
       every 10 s; the boost that jumped the throttle is disabled.
 - [x] **The shutter clicks on capture**, taking over from the voice: one click per frame written,
       never interrupting, on the siren's arming gate.
-- [ ] **Deploy the poller change to the Pi** — `SEND_ORIGINAL=0` (one message per event instead of
-      an album plus a duplicate document). The repository has it; `/usr/local/bin/camtrap-poll.sh`
-      on the Pi does not, and the Pi is only reachable from the home network:
+- [ ] **`SEND_ORIGINAL=0` has to land on the receiver instead of the Pi.** There is no way into
+      the home network from abroad — established by reading prod's `authorized_keys`, not by
+      guessing: the Pi's six keys are all forced commands with `no-port-forwarding`, msx's reverse
+      tunnel is `permitlisten="127.0.0.1:8899"` and nothing else, and the one full tunnel on
+      `127.0.0.1:2222` is this laptop's own `revtunnel.service`, which is in the hotel. Prod is
+      the only box both ends can always reach, so the relay learned to decline `send-doc`. To
+      apply it (the code is committed; the switch is not set):
+
+          ssh mt 'mkdir -p ~/.config && printf "SEND_DOC=0\n" > ~/.config/camtrap-tg.env'
+          scp deploy/prod/camtrap-tg.sh mt:/tmp/ && ssh mt 'cp ~/camtrap-tg.sh ~/camtrap-tg.sh.bak.pre-senddoc && install -m 700 /tmp/camtrap-tg.sh ~/camtrap-tg.sh'
+
+      Order matters: the switch first, then the script — the reverse leaves a tick where the new
+      script is live with the switch unset, which is simply the old behaviour, so it is safe
+      either way, but this order is never wrong.
+- [ ] **When home, put the decision back where it belongs** — deploy the poller and remove the
+      workaround, in that order, or the two disagree in a way that reads as a bug:
 
           scp deploy/pi/camtrap-poll.sh pi:/tmp/
           ssh pi 'sudo install -m 755 -o root -g root /tmp/camtrap-poll.sh /usr/local/bin/camtrap-poll.sh'
+          ssh mt 'rm ~/.config/camtrap-tg.env'
 
-      Until then every event still arrives as an album plus the uncompressed original. Nothing is
-      broken by the delay — it is one extra message per event.
+      Until then, setting `SEND_ORIGINAL=1` on the Pi would do nothing, because prod is declining.
+- [ ] **Give the Pi a way in, so this cannot happen again.** msx already has the shape: a key on
+      prod with `restrict,port-forwarding,permitlisten="127.0.0.1:<port>"` and an `autossh` unit
+      at the Pi end. One evening at home; it turns "wait until we are back" into `ssh -p <port>`.
