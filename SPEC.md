@@ -1,7 +1,7 @@
 # camtrap — specification
 
 A camera trap running on a laptop: motion detection through the built-in webcam, a snapshot at
-once and then every 10 s while a visit lasts, immediate off-box upload, and a Telegram alert with
+once and then every 30 s while a visit lasts, immediate off-box upload, and a Telegram alert with
 the photo. Sound is a camera-shutter click on every frame taken, and a police siren when the
 laptop itself is unplugged or its lid is closed. A spoken warning in the local language is built
 and shipped but switched off — see 3.4 for why the audible policy narrowed to this.
@@ -215,8 +215,11 @@ queue priority and the shape of the alert. Which sound plays is a separate polic
 been narrowed to almost nothing — see 3.4: as shipped, `motion` and `light` are silent and only
 two of the five tamper signals sound the siren. Everything else is shared.
 
-- First frame immediately, then one every `SNAPSHOT_INTERVAL = 10 s` for as long as the event
-  stays open. A change far above the threshold used to jump this throttle and take a frame a
+- First frame immediately, then one every `SNAPSHOT_INTERVAL = 30 s` for as long as the event
+  stays open. 5 s, then 10 s, now 30 s — the same complaint each time, that a visit produced more
+  photographs than anyone would look at. The cost is stated in the config beside the knob: the
+  frame that leads an alert is discounted for the first `KEY_SETTLE = 5 s`, so a visit shorter
+  than the interval has only the discounted trigger frame to lead with. A change far above the threshold used to jump this throttle and take a frame a
   second (`BOOST_AREA_PCT`); it is disabled — set to 0 — because the six-photo album it produced
   was six views of the same second, and the point of the cadence is to show the visit, not the
   instant.
@@ -319,7 +322,7 @@ instruction after using the trap for a night:
 |---|---|
 | `WARN_ON_MOTION = false` | **Stage 1 never plays.** No voice, in any language. |
 | `SIREN_SIGNALS = ["ac_offline", "lid_closed"]` | Only the cable and the lid scream. `scene_shift`, `power_button_pressed` and `camera_gone` still open a tamper event, still take the burst of frames and still alert — quietly. |
-| `SHUTTER_ON_CAPTURE = true` | **What replaced the voice.** A 0.3 s camera-shutter click on every frame the trap actually writes — at the shipped cadence, one every 10 s for as long as someone is in frame. |
+| `SHUTTER_ON_CAPTURE = true` | **What replaced the voice.** A 0.3 s camera-shutter click on every frame the trap actually writes — at the shipped cadence, one every 30 s for as long as someone is in frame. |
 
 The click is what remains of stage 1, and keeping it while dropping the voice is the point rather
 than a compromise. A voice argues: it addresses the person, in a language they may not speak, and
@@ -531,7 +534,10 @@ after: a trap running on battery with mute still set looks like it works and doe
 Cron every 2 minutes, in the style and discipline of the owner's external prober:
 
 - Pulls the list of new events from the VPS and sends the key frame to Telegram with a caption
-  (local time, event type, frame count); the remaining frames follow as an album.
+  (local time, event type, frame count). **One photograph, not an album** — `ALBUM_MAX = 1` since
+  2026-08-31: the frames that were not the key frame were never why anyone opened the alert, and
+  the complete event is on the receiver and in the warehouse either way. The album is still in the
+  script behind that number.
 - **One message per event.** The key frame also used to go a second time as an uncompressed
   document, since Telegram re-encodes photos — dropped 2026-08-28 (`SEND_ORIGINAL = 0`): it
   doubled the traffic per event for a copy nobody opens on a phone. Nothing is lost by it. The
@@ -898,7 +904,7 @@ non-obvious one. The owner's call.
 3. The Pi polling interval — 2 minutes against the external prober's 5. It needs its own cron
    file rather than being mixed into the existing one.
 4. Whether the first trigger warrants an alert separate from later ones in the same event
-   (currently assumed: one event, one message with an album).
+   (currently assumed: one event, one message, one photograph).
 5. Behaviour when the camera drops off the USB bus: treat it as a failure and alert, or
    reconnect quietly. I suggest alerting and classifying it as `tamper` — a camera vanishing in
    a locked room is suspicious in itself — but **without the siren**: bus glitches are more

@@ -105,10 +105,19 @@ class DetectorConfig:
 @dataclass
 class EventConfig:
     # One frame the moment the event opens, then one every snapshot_interval_sec for as long as
-    # the event stays open. 10 s rather than 5 on the owner's instruction after the first hotel
-    # run: at 5 s with the boost on, a two-minute event produced dozens of near-identical frames
-    # and the album that reached Telegram was six views of the same second.
-    snapshot_interval_sec: float = 10.0
+    # the event stays open. 5 s -> 10 s -> 30 s, each step on the owner's instruction after living
+    # with the one before: at 5 s with the boost on, a two-minute event produced dozens of
+    # near-identical frames and the album that reached Telegram was six views of the same second;
+    # at 10 s the number of photographs was still the complaint. Paired with the poller's
+    # ALBUM_MAX = 1, so a visit is one photograph in the chat and a handful of frames on the
+    # receiver.
+    #
+    # What the long cadence costs, said where the knob is: `key_settle_sec` discounts the first
+    # 5 s of an event because the trigger frame catches a back in a doorway and the face arrives
+    # a few seconds later. At 30 s the next candidate lands at +30 s, so a visit shorter than that
+    # has only the discounted trigger frame to lead with. Lower this — or lower `key_settle_sec` —
+    # if alert photographs start arriving too early to show a face.
+    snapshot_interval_sec: float = 30.0
     prebuffer_frames: int = 5
     prebuffer_interval_sec: float = 1.0
     event_gap_sec: float = 30.0

@@ -36,8 +36,12 @@ TAMPER_LINK_SEC="${TAMPER_LINK_SEC:-600}"
 MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
 # How many frames of one event to send as a group. The first frame BY NUMBER is the oldest
 # pre-buffer frame — an empty room seconds before anything happened — so the manifest's key_frame
-# leads, and the rest follow as an album. 1 disables the album.
-ALBUM_MAX="${ALBUM_MAX:-6}"
+# leads, and the rest follow as an album. 1 disables the album, and **1 is the default since
+# 2026-08-31, on the owner's instruction**: six photographs of one visit is five more than the
+# alert needs, and the ones that were not the key frame were never the reason anyone opened it.
+# The whole event is still on the receiver and in the warehouse, which is where a second view
+# would be fetched from. Raise it to get the album back.
+ALBUM_MAX="${ALBUM_MAX:-1}"
 # Telegram re-encodes photos, so the key frame used to ALSO go as a document keeping the original
 # 1080p/q95 pixels. **Off by default since 2026-08-28, on the owner's instruction**: it doubled the
 # messages per event for a copy nobody opened on a phone, and the original was never at risk — the

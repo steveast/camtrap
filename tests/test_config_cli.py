@@ -25,7 +25,7 @@ def test_defaults_match_spec(cfg):
     assert cfg.detector.motion_window_frames == 5
     # One frame at once, then one every 10 s while the event lasts. The boost that used to jump
     # this throttle is off — 0 means disabled, and it is what turned the cadence into a burst.
-    assert cfg.event.snapshot_interval_sec == 10.0
+    assert cfg.event.snapshot_interval_sec == 30.0
     assert cfg.event.boost_area_pct == 0.0
     assert cfg.event.max_frames_per_event == 60
     assert cfg.spool.max_mb == 1024

@@ -297,7 +297,7 @@ def _drive(runner, frame, now):
 
 
 def test_the_click_follows_the_cadence_not_the_frame_rate(framed):
-    """Frames arrive five times a second and are written once every ten. Clicks follow writes.
+    """Frames arrive five times a second and are written once a cadence slot. Clicks follow writes.
 
     This is the whole reason the click hangs off the writer's frame counter rather than off the
     detector's verdict: motion is continuous, photography is not.
@@ -308,8 +308,10 @@ def test_the_click_follows_the_cadence_not_the_frame_rate(framed):
         frame[120:260, 100 + (index % 8) * 25 : 230 + (index % 8) * 25] = 210
         _drive(runner, frame, 70.0 + index * 0.2)
     clicks = len(runner.spawned.shutters())
-    # One when the event opens, then one per 10 s slot. Nowhere near one per frame.
-    assert 2 <= clicks <= 5, f"expected a handful of clicks over 30 s, got {clicks}"
+    # One when the event opens, then one per cadence slot — at the shipped 30 s, one or two in
+    # 30 s. The ceiling is the whole point: 150 frames arrived to produce them. Driving this
+    # longer measures something else, the detector learning a repeating pattern as background.
+    assert 1 <= clicks <= 3, f"expected a handful of clicks over 30 s, got {clicks}"
 
 
 def test_a_frame_the_throttle_refused_makes_no_sound(framed):

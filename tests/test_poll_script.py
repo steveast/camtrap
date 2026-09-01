@@ -140,8 +140,21 @@ def test_a_motion_event_is_delivered_with_its_frames(rig):
     assert "frames: 4" in body
 
 
+def test_one_event_is_one_photograph(rig):
+    """`ALBUM_MAX = 1` since 2026-08-31: the key frame, and nothing beside it.
+
+    Six photographs of one visit is five more than the alert needs, and the whole event is on the
+    receiver and in the warehouse regardless. The album stays in the script behind the number.
+    """
+    rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
+    rig.run()
+    assert rig.sent() == ["photo-evt_20260820T111500Z_005.jpg.txt"], rig.sent()
+    assert not [name for name in rig.sent() if name.startswith("album-")]
+
+
 def test_the_key_frame_leads_the_album(rig):
     """The key frame leads, then the newest frames. `_000` is the room before anything happened."""
+    rig.env["ALBUM_MAX"] = "6"  # the album is off by default; this is the knob it lives behind
     rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
     rig.run()
     album = [n for n in rig.sent() if n.startswith("album-")]

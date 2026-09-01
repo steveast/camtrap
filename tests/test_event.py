@@ -28,7 +28,7 @@ def test_prebuffer_keeps_the_frames_before_the_trigger(writer):
     assert len(names) == 6  # 5 pre-buffer plus the trigger frame
 
 
-def test_throttling_gives_six_frames_per_minute(writer):
+def test_throttling_holds_the_cadence_over_a_minute(writer):
     writer.observe(_frame(), now=0.0)
     event = writer.begin(EventKind.MOTION, now=0.0, frame=_frame())
     written_at_start = event.frames_written
@@ -37,7 +37,8 @@ def test_throttling_gives_six_frames_per_minute(writer):
     for index in range(1, 301):  # 60 s at 5 fps
         writer.feed(_frame(), now=index * 0.2)
     added = event.frames_written - written_at_start
-    assert added == 6, f"expected one frame per 10 s, got {added}"
+    interval = writer.cfg.event.snapshot_interval_sec
+    assert added == int(60.0 / interval), f"expected one frame per {interval:g} s, got {added}"
 
 
 def test_event_closes_after_the_gap(writer):
@@ -177,11 +178,13 @@ def test_sound_is_recorded_in_the_manifest_without_waiting_for_close(writer, cfg
     assert manifest["sound_played"] is True
 
 
-def test_the_shipped_cadence_is_one_frame_at_once_then_one_every_ten_seconds(cfg):
-    """The owner's instruction after the first hotel run, as a test.
+def test_the_shipped_cadence_is_one_frame_at_once_then_one_every_interval(cfg):
+    """The owner's instruction after the first hotel run, as a test — 5 s, then 10 s, now 30 s.
 
     The boost is what this replaces. With it on, a person in frame produced a frame a second and
-    the six-photo album that reached Telegram was six views of the same moment.
+    the six-photo album that reached Telegram was six views of the same moment. The timings come
+    from the knob: the cadence has been raised twice, and each time this test was the thing that
+    had to be re-read to find out whether it still said anything.
     """
     cfg.spool_dir.mkdir(parents=True, exist_ok=True)
     writer = EventWriter(cfg)
@@ -191,11 +194,12 @@ def test_the_shipped_cadence_is_one_frame_at_once_then_one_every_ten_seconds(cfg
     assert at_once > 0
 
     # A change far above the trigger threshold no longer buys extra frames.
+    interval = cfg.event.snapshot_interval_sec
     assert writer.feed(_frame(), now=1.0, changed_pct=40.0) is False
-    assert writer.feed(_frame(), now=9.9, changed_pct=40.0) is False
-    assert writer.feed(_frame(), now=10.0, changed_pct=40.0) is True
-    assert writer.feed(_frame(), now=19.0, changed_pct=40.0) is False
-    assert writer.feed(_frame(), now=20.0, changed_pct=40.0) is True
+    assert writer.feed(_frame(), now=interval - 0.1, changed_pct=40.0) is False
+    assert writer.feed(_frame(), now=interval, changed_pct=40.0) is True
+    assert writer.feed(_frame(), now=interval * 2 - 1.0, changed_pct=40.0) is False
+    assert writer.feed(_frame(), now=interval * 2, changed_pct=40.0) is True
     assert event.frames_written == at_once + 2
     assert event.boosted_frames == 0
 
@@ -260,10 +264,12 @@ def test_the_manifest_names_the_most_changed_frame_not_the_oldest(cfg):
     writer = EventWriter(cfg)
     for tick in range(6):
         writer.observe(_frame(50), now=float(tick))  # quiet room into the ring
+    interval = cfg.event.snapshot_interval_sec
     event = writer.begin(EventKind.MOTION, now=6.0, frame=_frame(60), changed_pct=1.2)
-    writer.feed(_frame(200), now=16.0, changed_pct=11.4)  # the person, one cadence slot later
-    writer.feed(_frame(70), now=26.0, changed_pct=2.0)
-    writer.close(now=60.0)
+    # the person, one cadence slot later
+    writer.feed(_frame(200), now=6.0 + interval, changed_pct=11.4)
+    writer.feed(_frame(70), now=6.0 + interval * 2, changed_pct=2.0)
+    writer.close(now=6.0 + interval * 3)
 
     manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
     assert manifest["key_changed_pct"] == 11.4
@@ -293,8 +299,9 @@ def test_a_dark_frame_never_leads_however_much_of_it_changed(cfg):
     writer = EventWriter(cfg)
     writer.observe(_frame(6), now=0.0)  # a dark room
     event = writer.begin(EventKind.MOTION, now=1.0, frame=_frame(14), changed_pct=99.2)
-    writer.feed(_frame(119), now=11.0, changed_pct=30.0)  # the light is on, the person is in
-    writer.close(now=60.0)
+    # the light is on, the person is in
+    writer.feed(_frame(119), now=1.0 + cfg.event.snapshot_interval_sec, changed_pct=30.0)
+    writer.close(now=90.0)
 
     manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
     assert manifest["key_frame"].endswith("_002.jpg"), manifest["key_frame"]
@@ -326,8 +333,8 @@ def test_an_event_that_is_dark_throughout_still_names_its_best_frame(cfg):
     writer = EventWriter(cfg)
     writer.observe(_frame(6), now=0.0)
     event = writer.begin(EventKind.MOTION, now=1.0, frame=_frame(6), changed_pct=4.0)
-    writer.feed(_frame(6), now=12.0, changed_pct=18.0)
-    writer.close(now=60.0)
+    writer.feed(_frame(6), now=2.0 + cfg.event.snapshot_interval_sec, changed_pct=18.0)
+    writer.close(now=90.0)
 
     manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
     assert manifest["key_frame"].endswith("_002.jpg"), manifest["key_frame"]
