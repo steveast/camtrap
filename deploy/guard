@@ -61,8 +61,11 @@ case "${1:-arm}" in
         fi
         mkdir -p "$LOG_DIR"
         printf '\n=== %s : camtrap guard (detached) ===\n' "$(date -Is)" >> "$LOG"
+        # stdout goes nowhere: --log-file already writes every line, and sending both to $LOG
+        # wrote the whole journal twice — which also doubled every count `guard report` derives
+        # from it. stderr still lands there: a traceback is the one thing not logged twice.
         setsid env PYTHONPATH="$REPO/src" "$PY" -m camtrap --log-file "$LOG" guard "$@" \
-            </dev/null >>"$LOG" 2>&1 &
+            </dev/null >/dev/null 2>>"$LOG" &
         sleep 3
         if pgrep -f "camtrap.*guard" >/dev/null 2>&1; then
             echo "guard: running detached, pid $(pgrep -f 'camtrap.*guard' | head -1)"

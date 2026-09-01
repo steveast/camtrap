@@ -131,6 +131,35 @@ journalctl -t camtrap-poll -n 100            # on the Pi
 journalctl -t camtrap-recv -n 100            # on the receiver
 ```
 
+## When nothing arrives in Telegram
+
+The chain is laptop → VPS → Pi → chat, and it is diagnosed by finding where the evidence stops.
+Start on the laptop, because that is where it stops most often:
+
+```sh
+guard report                  # "spool" and the upload counters
+camtrap selftest              # the `receiver` row, in full
+ls ~/.local/share/camtrap/spool | wc -l
+```
+
+A spool that only grows means nothing was ever acknowledged, and the reason is in the log:
+
+| In the log | Meaning | Fix |
+|---|---|---|
+| `why=rc=127` | ssh got a **shell**, not the forced command: the wrong key won the handshake. Every verb is then an unknown command | check `ssh_options` carries `IdentitiesOnly=yes` and `IdentityAgent=none`, and that `~/.ssh/config` is not adding an identity for that host |
+| `why=rc=255` | ssh could not connect at all — network, host key, or the receiver is down | `camtrap selftest`; the frames are safe, they wait |
+| `why=unexpected reply` / `checksum mismatch` | the receiver stored something other than what was sent | look at `journalctl -t camtrap-recv` on the VPS; nothing is deleted locally until it matches |
+| nothing at all, spool empty | the frames left the laptop | continue on the Pi: `journalctl -t camtrap-poll -n 100` |
+
+Two traps in this particular failure, both deliberate elsewhere in the design:
+
+- **The preflight `receiver` row is a warning, not a blocker.** An unreachable receiver must not
+  stop the trap from arming — hotel wifi dies nightly and the siren needs no network — so a `FAIL`
+  on that row scrolls past and the run continues. Read it before you walk out.
+- **`paused` suppresses the "agent went silent" alert.** So a run that is armed but cannot check
+  in looks exactly like a laptop that is deliberately switched off, and nothing raises a hand.
+  After `camtrap resume`, confirm a 🛡 actually arrives.
+
 ## If the siren is going off right now and should not be
 
 ```sh

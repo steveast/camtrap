@@ -265,15 +265,40 @@ class Uploader:
         self._next_attempt = 0.0
 
     def drain(self, *, now: float = 0.0, limit: int | None = None) -> UploadReport:
+        """One pass over the queue. Failure is per sink, and so is the backoff.
+
+        The receiver being unreachable used to stop the pass at the file it failed on, which
+        quietly starved the sink that exists for exactly that situation: with `prod` refusing
+        every put, the warehouse copy received the first artefact of an afternoon and none of the
+        197 behind it. `limit` bounds the files actually worked on, not the files looked at —
+        otherwise a queue whose head is already copied would be re-examined for ever while the
+        backlog behind it never moved.
+        """
         report = UploadReport()
+        budget = limit if limit is not None else -1
+        # A sink that fails is not asked again in this pass — 197 artefacts against a dead
+        # receiver would spend the whole tick timing out — but the others carry on.
+        spent: set[str] = set()
         if not self.backoff_ready(now=now):
-            return report
-        for path in self.spool.pending()[: limit or None]:
+            spent.add("prod")
+        for path in self.spool.pending():
+            if budget == 0:
+                break
             if not path.exists():
                 continue
+            work = [sink for sink in self.sinks if sink.name not in spent]
+            # Already in the warehouse: copying it again would recompress it again, every tick,
+            # for as long as the receiver stays down.
+            work = [
+                sink for sink in work if sink.name != "mega" or not self.spool.is_copied(path.name)
+            ]
+            if not work:
+                if len(spent) == len(self.sinks):
+                    break
+                continue  # nothing left to do for this file; it does not cost the batch budget
             acknowledged = False
-            any_failure = False
-            for sink in self.sinks:
+            asked_for_ack = False
+            for sink in work:
                 try:
                     result = sink.send(path)
                 except Exception as exc:
@@ -284,20 +309,28 @@ class Uploader:
                         self.spool.mark_copied(path.name)
                     if result.acknowledged:
                         acknowledged = True
+                    else:
+                        asked_for_ack = asked_for_ack or sink.name == "prod"
                 else:
-                    any_failure = True
+                    spent.add(sink.name)
                     log.emit("upload_failed", sink=sink.name, file=path.name, why=result.detail)
+                    if sink.name == "prod":
+                        asked_for_ack = True
+                        self._note_failure(now=now)
+            budget -= 1
             if acknowledged:
                 # The only place a file is removed on success.
                 self.spool.acknowledge(path.name)
                 report.acknowledged.append(path.name)
                 report.sent.append(path.name)
                 self._note_success()
-            else:
+            elif asked_for_ack:
+                # Only a file the receiver was actually asked about counts as failed: the tamper
+                # path waits on this, and waiting out the siren delay for a sink that was never
+                # asked would delay the alarm for nothing.
                 report.failed.append(path.name)
-                if any_failure:
-                    self._note_failure(now=now)
-                    break  # stop the batch; the next tick retries from the front of the queue
+            if len(spent) == len(self.sinks):
+                break
         return report
 
     def heartbeat(self, line: str) -> bool:

@@ -508,7 +508,12 @@ camera down.
 - `SPOOL_MAX_MB = 512`. On overflow the oldest mid-event frames are dropped; the first frame of
   an event is never dropped. Every drop is logged.
 - One receiver failing must not stop the other: an unreachable VPS does not cancel the cloud
-  copy, and a missing cloud folder does not cancel the upload.
+  copy, and a missing cloud folder does not cancel the upload. Concretely — and this is where the
+  first implementation was wrong — failure and backoff are **per sink, not per pass**: a sink that
+  refuses is dropped for the rest of that pass, the queue keeps moving through the sinks that
+  still answer, and `UPLOAD_RETRY_MAX_SEC` silences the receiver, not the warehouse. Stopping the
+  pass at the artefact `prod` choked on left the warehouse holding the first manifest of an
+  afternoon and nothing else, which is precisely the case it exists for.
 
 ### 3.6 Heartbeat (laptop → VPS)
 
@@ -749,6 +754,12 @@ sequence kept for regression.
 - The laptop's key to the VPS is **write-only**, forced command, `no-pty`,
   `no-port-forwarding`. It must not be able to read the inbox, delete anything, or run anything
   else.
+- That key, and no other identity, is what the transport offers: `IdentitiesOnly=yes` and
+  `IdentityAgent=none` on every invocation. `-i` alone only *adds* an identity — OpenSSH prefers
+  agent-held ones — so a privileged key in the owner's ssh-agent silently wins the handshake,
+  gets a shell instead of the forced command, and turns every verb into `rc=127` while the frames
+  pile up unacknowledged. The trap must not be able to reach a key that can do more than put a
+  frame; the disk it runs on is assumed to be in the thief's hands.
 - The siren plays only on `tamper`, and only after the event's first frame has been sent or
   `SOUND_DELAY_MAX_SEC` has expired. The "evidence first, noise second" ordering is not
   negotiable.

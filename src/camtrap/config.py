@@ -298,6 +298,19 @@ class UploadConfig:
             "BatchMode=yes",
             "-o",
             "ConnectTimeout=10",
+            # The write-only key and nothing else. `-i` only *adds* an identity: OpenSSH offers
+            # agent-held copies of configured identities before file-only ones, so an admin key
+            # sitting in the desktop's ssh-agent — and ~/.ssh/config is what puts one there, for
+            # this very host — wins the handshake, lands in a normal shell instead of the forced
+            # command, and every verb comes back "command not found" (rc=127). That cost one
+            # armed afternoon: 197 artefacts photographed, spooled, and delivered nowhere.
+            # The agent is also a privilege this process must not hold. The whole transport is
+            # built on the laptop's disk being in the thief's hands; a trap that can reach an
+            # admin key is a trap that hands one over.
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "IdentityAgent=none",
             # One connection reused across a burst of frames. Without this every artefact pays a
             # full handshake — 60 of them on hotel wifi — and the server starts refusing with
             # rc=255 when they arrive back to back.

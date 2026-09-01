@@ -30,6 +30,31 @@ def test_no_warning_languages_is_a_warning_not_a_pass(cfg):
     assert langs.verdict == selftest.WARN
 
 
+def test_the_receiver_probe_offers_the_restricted_key_and_no_other(cfg, monkeypatch):
+    """The preflight assembles its own argv, so the transport's rule has to hold here too.
+
+    A probe that authenticates with a different key than the uploader will use answers the wrong
+    question: it went green on a shell session while every put-frame came back rc=127.
+    """
+    import subprocess
+
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="ok ping", stderr="")
+
+    monkeypatch.setattr(selftest.subprocess, "run", fake_run)
+    cfg.upload.local_inbox = ""
+    cfg.upload.ssh_target = "user@vps"
+    cfg.upload.ssh_key = "/home/x/.ssh/camtrap"
+    assert selftest.check_receiver(cfg).verdict == selftest.OK
+    argv = " ".join(seen[0])
+    assert "-i /home/x/.ssh/camtrap" in argv
+    assert "IdentitiesOnly=yes" in argv
+    assert "IdentityAgent=none" in argv
+
+
 def test_missing_camera_device_fails(cfg):
     cfg.camera.device = "/nonexistent/video9"
     check = selftest.check_camera(cfg)

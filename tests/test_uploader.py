@@ -73,6 +73,66 @@ def test_prod_failure_does_not_stop_the_cloud_copy(cfg, spool, local):
     assert spool.depth() == 1
 
 
+def test_a_dead_receiver_does_not_starve_the_warehouse(cfg, spool, local):
+    """The whole queue reaches the cloud copy, not just the artefact prod choked on.
+
+    Seen for real: an afternoon of 15 events, prod answering rc=127 to every put, and the
+    warehouse holding exactly one manifest — the head of the queue — because the pass stopped at
+    the first failure. The sink that exists for an unreachable receiver was disabled by the
+    receiver being unreachable.
+    """
+    for index in range(4):
+        _write(cfg, f"evt_A_{index:03d}.jpg")
+    local.available = False
+    Uploader(cfg, spool, sinks=[local, MegaSink(cfg)]).drain()
+    copied = sorted(path.name for path in cfg.mega_dir.iterdir())
+    assert copied == [f"evt_A_{index:03d}.jpg" for index in range(4)]
+    assert spool.depth() == 4, "a cloud copy is still not an acknowledgement"
+
+
+def test_the_warehouse_keeps_filling_while_prod_sits_in_backoff(cfg, spool, local):
+    """Backoff is the receiver's, not the queue's: five quiet minutes must not cost five minutes
+    of warehouse copies."""
+    _write(cfg, "evt_A_000.jpg")
+    local.available = False
+    uploader = Uploader(cfg, spool, sinks=[local, MegaSink(cfg)])
+    uploader.drain(now=0.0)  # prod fails, backoff starts
+    _write(cfg, "evt_A_001.jpg")
+    report = uploader.drain(now=1.0)  # still inside the backoff window
+    assert report.copied == ["evt_A_001.jpg"]
+    assert (cfg.mega_dir / "evt_A_001.jpg").exists()
+
+
+def test_a_copied_frame_is_not_copied_again(cfg, spool, local):
+    """Recompression is not free, and an outage lasts thousands of ticks."""
+    _write(cfg, "evt_A_000.jpg")
+    local.available = False
+    uploader = Uploader(cfg, spool, sinks=[local, MegaSink(cfg)])
+    assert uploader.drain(now=0.0).copied == ["evt_A_000.jpg"]
+    assert uploader.drain(now=1000.0).copied == [], "already in the warehouse"
+
+
+def test_a_frame_prod_was_never_asked_about_is_not_reported_failed(cfg, spool):
+    """`failed` is what the tamper path waits on. A sink that was never asked cannot be the
+    reason a siren is held back."""
+    _write(cfg, "evt_A_000.jpg")
+    report = Uploader(cfg, spool, sinks=[MegaSink(cfg)]).drain()
+    assert report.copied == ["evt_A_000.jpg"]
+    assert report.failed == [], "nothing here can acknowledge, so nothing here can be pending"
+
+
+def test_the_batch_budget_counts_work_not_files(cfg, spool, local):
+    """A queue whose head is already in the warehouse must still advance."""
+    for index in range(4):
+        _write(cfg, f"evt_A_{index:03d}.jpg")
+    local.available = False
+    mega = MegaSink(cfg)
+    uploader = Uploader(cfg, spool, sinks=[local, mega])
+    assert len(uploader.drain(now=0.0, limit=2).copied) == 2
+    # The first two are done; the same limit must reach the two behind them, not re-examine them.
+    assert sorted(uploader.drain(now=1.0, limit=2).copied) == ["evt_A_002.jpg", "evt_A_003.jpg"]
+
+
 def test_a_missing_cloud_folder_does_not_stop_delivery(cfg, spool, local, monkeypatch):
     _write(cfg, "evt_A_000.jpg")
     mega = MegaSink(cfg)
@@ -226,6 +286,24 @@ def test_ssh_argv_carries_key_and_options(cfg):
     assert "-i" in argv and "/home/x/.ssh/camtrap" in argv
     assert "BatchMode=yes" in argv
     assert argv[-1] == "put-frame evt_A_000.jpg"
+
+
+def test_ssh_offers_the_restricted_key_and_no_other(cfg):
+    """`-i` alone is not a restriction, and the difference is a whole run's evidence.
+
+    An admin key for the same host in the desktop's ssh-agent is offered first, gets a normal
+    shell instead of the forced command, and turns every verb into rc=127 — with the frames
+    piling up in the spool because nothing is ever acknowledged. Seen for real: 197 artefacts,
+    fourteen retries, none delivered.
+    """
+    cfg.upload.ssh_target = "user@vps"
+    cfg.upload.ssh_key = "/home/x/.ssh/camtrap"
+    path = _write(cfg, "evt_A_000.jpg", size=8)
+    ssh = FakeSsh(reply=b"")
+    ProdSink(cfg, runner=ssh).send(path)
+    argv = " ".join(ssh.calls[0][0])
+    assert "IdentitiesOnly=yes" in argv, "-i must be the only identity, not merely one of them"
+    assert "IdentityAgent=none" in argv, "the trap must not be able to reach an admin key"
 
 
 # --- a sink is untrusted code: it must never end the run ---------------------------------------
