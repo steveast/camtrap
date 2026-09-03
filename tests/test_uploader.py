@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from camtrap.spool import Spool
-from camtrap.uploader import LocalSink, MegaSink, ProdSink, Uploader
+from camtrap.uploader import LocalSink, MegaSink, ProdSink, TelegramSink, Uploader
 
 
 def _write(cfg, name, size=256):
@@ -476,3 +476,200 @@ def test_the_cloud_copy_still_never_acknowledges(cfg, spool):
     report = Uploader(cfg, spool, sinks=[MegaSink(cfg)]).drain()
     assert report.copied and not report.acknowledged
     assert spool.depth() == 1
+
+
+# --- the clip path: from this laptop to the chat ------------------------------------------------
+
+
+def _creds(cfg, *, mode=0o600, token="123:ABC", chat="42"):
+    path = cfg.telegram_env_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_CHAT_ID={chat}\n")
+    path.chmod(mode)
+    return path
+
+
+class FakeCurl:
+    """Records what curl was asked to do, and what it was told on stdin."""
+
+    def __init__(self, *, body='{"ok":true,"result":{}}', code=0, stderr=""):
+        self.calls: list[tuple[list[str], str]] = []
+        self.body = body
+        self.code = code
+        self.stderr = stderr
+
+    def __call__(self, argv, *, payload, timeout):
+        self.calls.append((argv, payload))
+
+        class Result:
+            returncode = self.code
+            stdout = self.body
+            stderr = self.stderr
+
+        return Result()
+
+
+@pytest.fixture
+def tg(cfg, tmp_path):
+    cfg.video.telegram_env_file = str(tmp_path / "telegram.env")
+    return cfg
+
+
+def test_a_clip_segment_is_sent_and_acknowledged(tg, spool):
+    _creds(tg)
+    path = _write(tg, "evt_A_v000.mp4", size=4096)
+    curl = FakeCurl()
+    result = TelegramSink(tg, runner=curl).send(path)
+    assert result.ok and result.acknowledged, result.detail
+    _argv, config = curl.calls[0]
+    assert "sendVideo" in config
+    assert f"video=@{path}" in config
+    assert 'form = "chat_id=42"' in config
+
+
+def test_the_token_never_appears_in_argv(tg):
+    """/proc is world-readable, so an argv is published to every process on this machine.
+
+    Putting the bot token in a URL on the command line would hand it to any local account — which
+    would be a second, avoidable leak on top of the one the owner deliberately accepted by moving
+    the token onto a machine assumed to be stolen.
+    """
+    _creds(tg, token="SECRET123:TOKEN")
+    path = _write(tg, "evt_A_v000.mp4", size=1024)
+    curl = FakeCurl()
+    TelegramSink(tg, runner=curl).send(path)
+    argv, config = curl.calls[0]
+    assert not any("SECRET123" in arg for arg in argv), argv
+    assert argv[-2:] == ["--config", "-"], "the token arrives on stdin"
+    assert "SECRET123" in config, "and it does arrive"
+
+
+def test_a_world_readable_token_file_is_refused(tg):
+    """The way ssh refuses a group-readable key, and for the same reason."""
+    _creds(tg, mode=0o644)
+    path = _write(tg, "evt_A_v000.mp4")
+    curl = FakeCurl()
+    result = TelegramSink(tg, runner=curl).send(path)
+    assert not result.ok
+    assert "readable by others" in result.detail
+    assert not curl.calls, "nothing is sent with a token anyone could have read"
+
+
+def test_a_missing_token_file_says_which_file(tg):
+    path = _write(tg, "evt_A_v000.mp4")
+    result = TelegramSink(tg, runner=FakeCurl()).send(path)
+    assert not result.ok and "telegram.env" in result.detail
+
+
+def test_a_photograph_is_never_sent_to_the_chat_from_the_laptop(tg):
+    """Photographs go to a receiver this machine cannot delete from. That is the whole point."""
+    _creds(tg)
+    path = _write(tg, "evt_A_000.jpg")
+    curl = FakeCurl()
+    result = TelegramSink(tg, runner=curl).send(path)
+    assert not result.ok and "clips only" in result.detail
+    assert not curl.calls
+
+
+def test_an_oversized_clip_is_refused_before_the_uplink_pays_for_it(tg):
+    _creds(tg)
+    tg.video.telegram_max_mb = 1
+    path = _write(tg, "evt_A_v000.mp4", size=2 * 1024 * 1024)
+    curl = FakeCurl()
+    result = TelegramSink(tg, runner=curl).send(path)
+    assert not result.ok and "cap" in result.detail
+    assert not curl.calls, "Telegram would refuse it at 50 MB; do not spend a hotel uplink on that"
+
+
+def test_a_refusal_from_telegram_is_not_an_acknowledgement(tg):
+    _creds(tg)
+    path = _write(tg, "evt_A_v000.mp4")
+    result = TelegramSink(
+        tg, runner=FakeCurl(body='{"ok":false,"description":"chat not found"}')
+    ).send(path)
+    assert not result.ok and not result.acknowledged
+
+
+def test_a_blocked_network_is_a_failure_not_a_hang(tg):
+    """api.telegram.org is unreachable from the owner's home network. curl says so with an rc."""
+    _creds(tg)
+    path = _write(tg, "evt_A_v000.mp4")
+    result = TelegramSink(tg, runner=FakeCurl(code=7, stderr="Failed to connect")).send(path)
+    assert not result.ok and "rc=7" in result.detail
+
+
+def test_the_connect_timeout_is_short_and_the_upload_timeout_is_not(tg):
+    """This runs inside the run loop's housekeeping, where a siren may be due.
+
+    A dead network has to fail in seconds; an upload in progress has to be allowed to finish.
+    """
+    _creds(tg)
+    path = _write(tg, "evt_A_v000.mp4")
+    curl = FakeCurl()
+    TelegramSink(tg, runner=curl).send(path)
+    _argv, config = curl.calls[0]
+    assert "connect-timeout = 5" in config
+    assert f"max-time = {int(tg.video.telegram_timeout_sec)}" in config
+
+
+def test_a_clip_goes_to_the_warehouse_and_the_chat_but_not_the_receiver(tg, spool, local):
+    """The routing, end to end through the uploader rather than through one sink."""
+    _creds(tg)
+    _write(tg, "evt_A_v000.mp4", size=2048)
+    curl = FakeCurl()
+    uploader = Uploader(tg, spool, sinks=[local, MegaSink(tg), TelegramSink(tg, runner=curl)])
+    report = uploader.drain()
+    assert report.acknowledged == ["evt_A_v000.mp4"], (
+        "the chat is a real delivery; the spool frees it"
+    )
+    assert spool.depth() == 0
+    assert (tg.mega_dir / "evt_A_v000.mp4").exists(), "and the warehouse keeps the original"
+    assert not (Path(tg.upload.local_inbox) / "evt_A_v000.mp4").exists(), (
+        "the receiver is out of the clip path by the owner's decision"
+    )
+    assert len(curl.calls) == 1
+
+
+def test_a_dead_chat_does_not_free_the_clip_and_backs_off(tg, spool, local):
+    """A clip whose only real delivery failed must stay, and must not be retried every second."""
+    _creds(tg)
+    _write(tg, "evt_A_v000.mp4", size=2048)
+    curl = FakeCurl(code=7)
+    uploader = Uploader(tg, spool, sinks=[local, MegaSink(tg), TelegramSink(tg, runner=curl)])
+    uploader.drain(now=100.0)
+    assert spool.depth() == 1, "a cp into a sync folder is not a delivery"
+    attempts = len(curl.calls)
+    uploader.drain(now=100.5)
+    assert len(curl.calls) == attempts, "the backoff holds it off the wire"
+    uploader.drain(now=100.0 + tg.spool.upload_retry_max_sec + 1.0)
+    assert len(curl.calls) > attempts, "and lets go once the wait has elapsed"
+
+
+def test_an_unconfigured_chat_does_not_wedge_the_spool(tg, spool, local):
+    """No token file means no acknowledgement will ever arrive, which is not the same as waiting.
+
+    Left as "waiting", clip segments would pile up until the cap, and the spool would then drop
+    one for every new one written — for the whole trip, on a run where nobody had filled in a
+    token. The warehouse frees them instead, exactly as it did before the chat existed, and
+    `telegram_ok=0` in the heartbeat says why they are not in the chat.
+    """
+    tg.video.telegram_env_file = str(tg.spool_dir.parent / "never-created.env")
+    _write(tg, "evt_A_v000.mp4", size=2048)
+    curl = FakeCurl()
+    uploader = Uploader(tg, spool, sinks=[local, MegaSink(tg), TelegramSink(tg, runner=curl)])
+    report = uploader.drain(now=0.0)
+    assert report.acknowledged == ["evt_A_v000.mp4"]
+    assert spool.depth() == 0
+    assert (tg.mega_dir / "evt_A_v000.mp4").exists()
+    assert not curl.calls, "nothing is attempted without a token"
+
+
+def test_a_configured_chat_that_is_merely_offline_is_still_waited_for(tg, spool, local):
+    """The distinction that makes the fallback safe: unusable is not the same as unreachable."""
+    _creds(tg)
+    _write(tg, "evt_A_v000.mp4", size=2048)
+    uploader = Uploader(
+        tg, spool, sinks=[local, MegaSink(tg), TelegramSink(tg, runner=FakeCurl(code=7))]
+    )
+    uploader.drain(now=0.0)
+    assert spool.depth() == 1, "a delivery that is possible later must be waited for"

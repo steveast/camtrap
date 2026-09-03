@@ -109,6 +109,12 @@ def preflight(
     inhibit = selftest.check_inhibit()
     rows.append(("no-sleep", inhibit.verdict != selftest.FAIL, inhibit.detail))
 
+    # Not blocking, and not a formality either: this one really encodes. A trap whose clips
+    # silently never happen is the same class of failure as a siren that cannot sound, and the
+    # only difference is that the photographs still work — which is why it is a warning.
+    video = selftest.check_video(cfg)
+    rows.append(("video", video.verdict != selftest.FAIL, video.detail))
+
     blocking = {"camera", "sound files", "speakers", "sound policy"}
     ready = all(ok for name, ok, _ in rows if name in blocking)
     return ready, rows
@@ -124,8 +130,10 @@ def watch(cfg: Config, *, minutes: float = 30.0, still: float = 10.0) -> int:
     cfg.sound.dry_run = True
     cfg.arming.mode = "on_still"
     cfg.arming.arm_when_still_sec = still
-    # A rehearsal is not evidence: keep test frames out of the cloud sync folder.
+    # A rehearsal is not evidence: keep test frames out of the cloud sync folder — and out of
+    # the chat, which is where a clip would otherwise go from this very machine.
     cfg.upload.sinks = [name for name in cfg.upload.sinks if name != "mega"]
+    cfg.video.enabled = False
 
     # An observation run in `paused` measures nothing: the gate refuses every stage with
     # reason=paused before the detector's verdict is ever consulted, so the report comes back

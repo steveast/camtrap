@@ -31,3 +31,9 @@ TRIP.local.md
 .venv-voice/
 *.onnx
 *.onnx.json
+
+# A bot token, should one ever be dropped in the working tree by mistake. The real one lives in
+# ~/.config/camtrap/telegram.env, mode 600, and never here.
+telegram.env
+*.env
+!deploy/**/*.env.example

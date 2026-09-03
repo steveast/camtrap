@@ -42,6 +42,33 @@ MOTION_ALERTS_PER_HOUR="${MOTION_ALERTS_PER_HOUR:-0}"
 # The whole event is still on the receiver and in the warehouse, which is where a second view
 # would be fetched from. Raise it to get the album back.
 ALBUM_MAX="${ALBUM_MAX:-1}"
+# Deliver EVERY frame of an event, not one photograph per event. The agent takes one frame every
+# `snapshot_interval_sec` (5 s) for as long as motion lasts; with a single alert per event the rest
+# of them only ever reached the receiver, so the chat showed one photograph of a three-minute
+# visit. On the owner's instruction since 2026-09-03: the frames arrive as they are taken.
+#
+# The two complaints this has to satisfy at once — "show me the whole visit" and "do not put
+# twenty-nine messages in my chat" — are answered by grouping rather than by dropping: frames
+# travel as media groups of up to STREAM_BATCH_MAX (Telegram's own ceiling is 10), so a minute of
+# motion is one or two messages carrying twelve photographs. STREAM=0 restores one alert per event.
+STREAM="${STREAM:-1}"
+STREAM_BATCH_MAX="${STREAM_BATCH_MAX:-10}"
+# Groups per event per pass. cron fires every other minute and the cadence writes ~12 frames a
+# minute, so one group per pass would fall permanently behind a visit that lasts. Three keeps up
+# with 2.5 minutes of motion per pass and still leaves the tick well inside POLL_BUDGET_SEC.
+STREAM_BATCHES_MAX="${STREAM_BATCHES_MAX:-3}"
+# How full a FOLLOW-UP group has to be before it is worth a message of its own. The alert itself
+# never waits — the first group of an event goes with whatever has arrived — but a pass runs every
+# 15 s and the cadence writes a frame every 5 s, so without this a visit sends a group of three
+# every quarter minute: four messages a minute, which is the complaint that shrank the cadence
+# three times over. Waiting until a group can be filled makes a lasting visit ~one message a
+# minute carrying ten photographs instead. Set to 1 to send each group as soon as it exists.
+STREAM_MIN_BATCH="${STREAM_MIN_BATCH:-$STREAM_BATCH_MAX}"
+# The tail of a visit is short by definition, and a closed event flushes it at once. This is the
+# backstop for a visit that never closes — the agent was carried off, shut down or ran out of
+# battery mid-event — so the last few frames cannot sit on the receiver waiting for a tenth that
+# will never be taken.
+STREAM_TAIL_SEC="${STREAM_TAIL_SEC:-120}"
 # Telegram re-encodes photos, so the key frame used to ALSO go as a document keeping the original
 # 1080p/q95 pixels. **Off by default since 2026-08-28, on the owner's instruction**: it doubled the
 # messages per event for a copy nobody opened on a phone, and the original was never at risk — the
@@ -62,6 +89,11 @@ SSH_MUX="-o ControlMaster=auto -o ControlPath=$CTL_DIR/camtrap-poll-%C -o Contro
 [ "${SSH_MULTIPLEX:-1}" = "1" ] || SSH_MUX=""
 
 mkdir -p "$STATE_DIR"
+
+# Markers outlive the events they name: the receiver's retention drops an event and the poller
+# then simply stops seeing it, but `sent-evt_*` stays behind for good. One tiny file per event is
+# invisible, which is exactly why it would never be noticed accumulating.
+find "$STATE_DIR" -maxdepth 1 -name 'sent-evt_*' -mtime +30 -delete 2>/dev/null || true
 
 log() { logger -t camtrap-poll "$*" 2>/dev/null || echo "camtrap-poll $*" >&2; }
 
@@ -229,10 +261,84 @@ hb_reason=$(printf '%s\n' "$state" | tr ' ' '\n' | awk -F= '$1 == "arm_reason" {
 # and to "the laptop is in someone's hands".
 events=$(printf '%s\n' "$listing" | awk '{print $1}' | sed -n 's/^\(evt_[0-9TZ]*\).*/\1/p' | sort -u)
 
+# --- one group of frames, one message ----------------------------------------------------------
+
+# Telegram's sendMediaGroup wants 2-10 items, so a batch of one goes as a plain photo. A group the
+# relay refuses degrades to its newest frame rather than jamming: a batch that can never be sent
+# would hold back every later frame of the same event, and the newest frame is the one that still
+# shows what is happening. What was skipped is logged, never silently dropped.
+send_batch() { # names (comma-separated, oldest first), caption
+    names=$1
+    text=$2
+    count=$(printf '%s' "$names" | tr ',' '\n' | grep -c . || true)
+    if [ "$count" -le 1 ]; then
+        send_photo "$names" "$text"
+        return $?
+    fi
+    if send_album "$names" "$text"; then
+        return 0
+    fi
+    newest=$(printf '%s' "$names" | tr ',' '\n' | tail -1)
+    log "batch album_failed=1 degraded_to=$newest skipped=$((count - 1))"
+    send_photo "$newest" "$text"
+}
+
+# The numeric index of a frame: evt_20260903T101010Z_007.jpg -> 7.
+frame_index() {
+    printf '%s\n' "$1" | awk -F_ 'NF > 1 { n = $NF; sub(/\.jpg$/, "", n); print n + 0 }'
+}
+
 tamper_seen=0
 for event in $events; do
     [ -n "$event" ] || continue
-    [ -f "$STATE_DIR/sent-$event" ] && continue
+
+    marker="$STATE_DIR/sent-$event"
+
+    # The highest frame index that has arrived, and the mtime of the newest of them — one awk for
+    # both. This loop visits every event on the receiver on every pass, which was 99 of them on
+    # 2026-09-03, so what it spends per event is the pass time: measured on the Pi, 1.45 s before
+    # the stream existed and 2.3 s with this probe, against a POLL_INTERVAL_SEC of 15.
+    #
+    # A table built once for the whole listing and looked up here with parameter expansion was the
+    # obvious way to have no probe at all, and it was measured at 13 s a pass — four times WORSE
+    # than forking. `${table##*"<key>"}` rescans a 600-line string from the end for every event,
+    # and shell string handling loses to a fork by two orders of magnitude on this box. Anything
+    # cheaper than this has to iterate the listing once and drive the loop from it, which means
+    # a subshell and losing what the loop accumulates.
+    probe=$(printf '%s\n' "$listing" | awk -v e="$event" '
+        BEGIN { newest = -1; mtime = 0 }
+        $1 ~ "^"e"_[0-9]+\\.jpg$" {
+            n = $1; sub(/^.*_/, "", n); sub(/\.jpg$/, "", n); n += 0
+            if (n > newest) newest = n
+            if ($3 + 0 > mtime) mtime = $3 + 0
+        }
+        END { printf "%d %d\n", newest, mtime }')
+    newest_index=${probe% *}
+    newest_mtime=${probe#* }
+
+    # marker: <epoch of the last send> <highest frame index delivered>
+    first_delivery=1
+    sent_upto=-1
+    if [ -f "$marker" ]; then
+        first_delivery=0
+        # `read` rather than `cut`: a builtin forks nothing, and it leaves the second field EMPTY
+        # for a one-field marker, which is exactly the case below. `cut` had to be talked into
+        # that with `-s` — without it, it prints the whole line when the delimiter is absent, so
+        # a marker from before the stream read back as index 1787000000 and the event went silent
+        # for good, because no frame could ever be "newer" than that.
+        sent_upto=""
+        read -r _marker_stamp sent_upto < "$marker" 2>/dev/null || true
+        if [ -z "$sent_upto" ]; then
+            # A marker written before the stream existed says the event was alerted but not which
+            # frames went. Adopt what is on the receiver now and send nothing: deploying this must
+            # not replay a whole afternoon into the chat.
+            printf '%s %s\n' "$(date -u +%s)" "$newest_index" > "$marker"
+            log "event id=$event adopted=1 upto=$newest_index"
+            continue
+        fi
+        [ "$STREAM" = "1" ] || continue
+        [ "$newest_index" -gt "$sent_upto" ] || continue
+    fi
 
     manifest=""
     if printf '%s\n' "$listing" | grep -q "^$event.json "; then
@@ -248,8 +354,36 @@ for event in $events; do
     key=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"key_frame":"\([^"]*\)".*/\1/p')
     key_pct=$(printf '%s' "$manifest" | tr -d ' \n' |
         sed -n 's/.*"key_changed_pct":\([0-9.]*\).*/\1/p')
+    # Where the event proper starts: the frames before it are the pre-buffer, the room BEFORE
+    # anything happened. They stay on the receiver as proof it was empty; sending five
+    # near-identical photographs of an empty room is not what "show me the whole visit" meant.
+    prebuffer=$(printf '%s' "$manifest" | tr -d ' \n' | sed -n 's/.*"prebuffer":\([0-9]*\).*/\1/p')
+    # The clip of this visit never reaches the receiver — it is a warehouse artefact by
+    # configuration — so the manifest is the only way the chat can learn that it exists. Say so:
+    # a photograph that arrives without mentioning the minute of video beside it is a photograph
+    # nobody thinks to go looking behind. The numbers appear once the event closes and the
+    # encoder is shut, so an alert sent mid-visit says nothing and its follow-ups do.
+    clip_segments=$(printf '%s' "$manifest" | tr -d ' \n' |
+        sed -n 's/.*"clip_segments":\([0-9]*\).*/\1/p')
+    clip_bytes=$(printf '%s' "$manifest" | tr -d ' \n' |
+        sed -n 's/.*"clip_bytes":\([0-9]*\).*/\1/p')
+    clip_line=""
+    if [ "${clip_segments:-0}" -gt 0 ] 2>/dev/null; then
+        clip_line="
+clip: ${clip_segments} segment(s), $(( ${clip_bytes:-0} / 1048576 )) MB — in the warehouse"
+    fi
     : "${type:=motion}"
     : "${frames:=1}"
+
+    now_epoch=$(date -u +%s)
+    # How long since the newest frame of this event arrived. A visit that has stopped producing
+    # frames is a visit whose tail must not sit waiting for a group it can never fill.
+    newest_age=$((now_epoch - newest_mtime))
+    [ "$newest_mtime" -gt 0 ] || newest_age=0
+
+    # Frames of this event that have actually arrived, oldest first. `_000` is the OLDEST
+    # pre-buffer frame — by construction the room a few seconds before anything happened.
+    present=$(printf '%s\n' "$listing" | awk '{print $1}' | grep "^${event}_.*\.jpg$" | sort)
 
     stamp=$(printf '%s\n' "$listing" | awk -v e="$event" '$1 ~ "^"e {print int($3); exit}')
     : "${stamp:=$(date -u +%s)}"
@@ -290,20 +424,19 @@ type: $type${signals:+
 signals: $signals}
 frames: $frames${key_pct:+
 motion: $key_pct% of frame}${sound:+
-sound: $sound}$cut_short$urgent"
+sound: $sound}$clip_line$cut_short$urgent"
 
-    now_epoch=$(date -u +%s)
-    if [ "$type" != "tamper" ] && ! motion_budget_left "$now_epoch"; then
+    # Only a first delivery is a new alert. Later groups of the same visit are the alert
+    # continuing, and counting them against the hourly cap would make the cap mean "photographs
+    # per hour" instead of "events per hour" — one long visit would exhaust it on its own.
+    if [ "$first_delivery" = "1" ] && [ "$type" != "tamper" ] &&
+        ! motion_budget_left "$now_epoch"; then
         # Over budget: mark it seen so it is not re-examined, and count it for the summary.
-        printf '%s\n' "$now_epoch" > "$STATE_DIR/sent-$event"
+        printf '%s %s\n' "$now_epoch" "$newest_index" > "$marker"
         motion_note_suppressed
         log "event id=$event type=$type suppressed=1 reason=hourly_cap"
         continue
     fi
-
-    # Frames of this event that have actually arrived, oldest first. `_000` is the OLDEST
-    # pre-buffer frame — by construction the room a few seconds before anything happened.
-    present=$(printf '%s\n' "$listing" | awk '{print $1}' | grep "^${event}_.*\.jpg$" | sort)
 
     # The frame worth looking at, per the manifest. The manifest sorts ahead of the frames it
     # names, so it can arrive naming a frame that is still uploading; the old fallback then picked
@@ -315,6 +448,92 @@ sound: $sound}$cut_short$urgent"
         lead=$(printf '%s\n' "$present" | tail -1)
         [ -n "$lead" ] || lead="${event}_000.jpg"
     fi
+
+    # The uncompressed original of the key frame, for the copy that matters.
+    send_original() {
+        [ "$SEND_ORIGINAL" = "1" ] || return 0
+        send_doc "$lead" "🔍 original, uncompressed — $lead" || log "original_failed name=$lead"
+    }
+
+    note_first_delivery() {
+        [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
+        [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
+        return 0
+    }
+
+    # --- the stream: every frame of the visit, in groups ---------------------------------------
+
+    if [ "$STREAM" = "1" ]; then
+        # Missing `prebuffer` means a manifest written by an agent older than this field. The key
+        # frame is then the best available answer to "where does the run-up end", and it is the
+        # one the old single-photo alert used for exactly that reason.
+        stream_from="${prebuffer:-}"
+        [ -n "$stream_from" ] || stream_from=$(frame_index "$lead")
+        : "${stream_from:=0}"
+        [ "$sent_upto" -ge "$((stream_from - 1))" ] || sent_upto=$((stream_from - 1))
+
+        batches=0
+        while [ "$batches" -lt "$STREAM_BATCHES_MAX" ]; do
+            batch=""
+            batch_last=$sent_upto
+            batch_count=0
+            for name in $present; do
+                index=$(frame_index "$name")
+                [ -n "$index" ] || continue
+                [ "$index" -gt "$sent_upto" ] || continue
+                [ "$batch_count" -lt "$STREAM_BATCH_MAX" ] || break
+                [ -z "$batch" ] && batch="$name" || batch="$batch,$name"
+                batch_last=$index
+                batch_count=$((batch_count + 1))
+            done
+
+            if [ -z "$batch" ]; then
+                # Nothing to send yet. On a first delivery that means the manifest arrived ahead
+                # of its frames — worth saying at once, because the alert is the point and the
+                # frames follow on their own.
+                if [ "$first_delivery" = "1" ] && send_message "$caption"; then
+                    printf '%s %s\n' "$(date -u +%s)" "$sent_upto" > "$marker"
+                    note_first_delivery
+                    log "event id=$event type=$type sent=1 photo=0"
+                fi
+                break
+            fi
+
+            # A follow-up waits until it can fill a group. The alert never waits, a closed event
+            # flushes whatever is left, and a visit that stopped producing frames flushes on the
+            # tail timer — the point is to group what is still coming, not to strand a tail.
+            if [ "$first_delivery" = "0" ] && [ "$batch_count" -lt "$STREAM_MIN_BATCH" ] &&
+                [ "$closed" != "true" ] && [ "$newest_age" -lt "$STREAM_TAIL_SEC" ]; then
+                log "event id=$event held=$batch_count of $STREAM_MIN_BATCH age=${newest_age}s"
+                break
+            fi
+
+            if [ "$first_delivery" = "1" ]; then
+                text="$caption"
+            else
+                text="$icon $headline — continues
+time: $(local_time "$(date -u +%s)")
+frames: $((sent_upto + 1))-$batch_last of $frames$clip_line"
+            fi
+
+            if ! send_batch "$batch" "$text"; then
+                log "event id=$event type=$type sent=0 from=$((sent_upto + 1))"
+                break
+            fi
+            printf '%s %s\n' "$(date -u +%s)" "$batch_last" > "$marker"
+            log "event id=$event type=$type frames=$batch_count upto=$batch_last stream=1 sent=1"
+            if [ "$first_delivery" = "1" ]; then
+                send_original
+                note_first_delivery
+                first_delivery=0
+            fi
+            sent_upto=$batch_last
+            batches=$((batches + 1))
+        done
+        continue
+    fi
+
+    # --- STREAM=0: one photograph per event, the behaviour up to 2026-09-03 --------------------
 
     # Album: the key frame leads, then the newest frames. The pre-buffer proves the room was
     # empty before, which is worth keeping on the receiver but is not what the alert is about.
@@ -329,18 +548,14 @@ sound: $sound}$cut_short$urgent"
         done
     fi
 
-    # The uncompressed original of the key frame, for the copy that matters.
-    send_original() {
-        [ "$SEND_ORIGINAL" = "1" ] || return 0
-        send_doc "$lead" "🔍 original, uncompressed — $lead" || log "original_failed name=$lead"
-    }
+    lead_index=$(frame_index "$lead")
+    : "${lead_index:=0}"
 
     if [ "$ALBUM_MAX" -gt 1 ] && [ "$album" != "$lead" ]; then
         if send_album "$album" "$caption"; then
             send_original
-            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
-            [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
-            [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
+            printf '%s %s\n' "$(date -u +%s)" "$newest_index" > "$marker"
+            note_first_delivery
             log "event id=$event type=$type frames=$frames key=$lead album=1 sent=1"
             continue
         fi
@@ -350,9 +565,8 @@ sound: $sound}$cut_short$urgent"
     if printf '%s\n' "$present" | grep -q "^$lead$"; then
         if send_photo "$lead" "$caption"; then
             send_original
-            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
-            [ "$type" = "tamper" ] && printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/last-tamper"
-            [ "$type" != "tamper" ] && motion_note_sent "$now_epoch"
+            printf '%s %s\n' "$(date -u +%s)" "$lead_index" > "$marker"
+            note_first_delivery
             log "event id=$event type=$type frames=$frames sent=1"
         else
             log "event id=$event type=$type sent=0"
@@ -360,7 +574,7 @@ sound: $sound}$cut_short$urgent"
         fi
     else
         if send_message "$caption"; then
-            printf '%s\n' "$(date -u +%s)" > "$STATE_DIR/sent-$event"
+            printf '%s %s\n' "$(date -u +%s)" "$sent_upto" > "$marker"
             log "event id=$event type=$type sent=1 photo=0"
         fi
     fi

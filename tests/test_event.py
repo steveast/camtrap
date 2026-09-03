@@ -254,6 +254,35 @@ def test_boosted_frames_are_recorded_in_the_manifest(cfg):
     assert manifest["boosted_frames"] == 1
 
 
+def test_the_manifest_says_where_the_pre_buffer_ends(cfg):
+    """The poller streams the frames of a visit and must not stream the room before it.
+
+    Without this the receiver-side rule is guesswork: `_000` is the oldest pre-buffer frame by
+    construction, but how many follow it depends on `prebuffer_frames` and on how long the ring
+    had been filling. The count is written where the poller can read it.
+    """
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    for tick in range(6):
+        writer.observe(_frame(50), now=float(tick))
+    event = writer.begin(EventKind.MOTION, now=6.0, frame=_frame(90), changed_pct=9.0)
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["prebuffer"] == cfg.event.prebuffer_frames
+    assert manifest["frames"] == cfg.event.prebuffer_frames + 1, "the run-up, then the trigger"
+
+
+def test_a_light_event_has_no_pre_buffer_to_skip(cfg):
+    """One frame, and it is the event proper: before the switch there was nothing to see."""
+    cfg.spool_dir.mkdir(parents=True, exist_ok=True)
+    writer = EventWriter(cfg)
+    for tick in range(6):
+        writer.observe(_frame(10), now=float(tick))
+    event = writer.begin(EventKind.LIGHT, now=6.0, frame=_frame(200), changed_pct=99.0)
+    manifest = json.loads((cfg.spool_dir / f"{event.event_id}.json").read_text())
+    assert manifest["prebuffer"] == 0
+    assert manifest["frames"] == 1
+
+
 def test_the_manifest_names_the_most_changed_frame_not_the_oldest(cfg):
     """The first frame by number is the oldest pre-buffer frame: an empty room five seconds early.
 

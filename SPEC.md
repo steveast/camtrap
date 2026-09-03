@@ -34,7 +34,9 @@ into a concrete conversation.
 - It does not prevent theft. This is a recorder, not a lock. What it does actively is make noise:
   a spoken warning when someone is in the room, a siren when the laptop is picked up. Neither
   stops anyone from walking out with it; they only make walking out loud.
-- It does not record video and it does not record audio. It plays sound; it never captures it.
+- It never records audio. It plays sound; it never captures it. Video it does record, as of
+  2026-09-03: a one-minute clip of each visit alongside the photographs (3.9). The photographs
+  remain the alert and the evidence of a face; the clip is the sequence behind them.
 - It does not recognise faces and keeps no database of people.
 - It is not a "find my laptop" service — geolocation is handled by separately installed
   software.
@@ -215,17 +217,25 @@ queue priority and the shape of the alert. Which sound plays is a separate polic
 been narrowed to almost nothing — see 3.4: as shipped, `motion` and `light` are silent and only
 two of the five tamper signals sound the siren. Everything else is shared.
 
-- First frame immediately, then one every `SNAPSHOT_INTERVAL = 30 s` for as long as the event
-  stays open. 5 s, then 10 s, now 30 s — the same complaint each time, that a visit produced more
-  photographs than anyone would look at. The cost is stated in the config beside the knob: the
-  frame that leads an alert is discounted for the first `KEY_SETTLE = 5 s`, so a visit shorter
-  than the interval has only the discounted trigger frame to lead with. A change far above the threshold used to jump this throttle and take a frame a
-  second (`BOOST_AREA_PCT`); it is disabled — set to 0 — because the six-photo album it produced
-  was six views of the same second, and the point of the cadence is to show the visit, not the
-  instant.
+- First frame immediately, then one every `SNAPSHOT_INTERVAL = 5 s` for as long as the event
+  stays open. 5 s, then 10 s, then 30 s, and back to 5 s on 2026-09-03 — the round trip is the
+  lesson. Each cut answered the same complaint, that a visit produced more photographs than
+  anyone would look at; that is a complaint about the **chat**, and every cut paid for it out of
+  the **record**. At 30 s the bill came due: a visit shorter than half a minute had exactly one
+  frame, the trigger frame, which by construction catches a back in a doorway. The two are
+  separate knobs again — density is here, chat volume is in the poller, which groups the frames
+  instead of dropping them (3.7). A change far above the threshold used to jump this throttle and
+  take a frame a second (`BOOST_AREA_PCT`); it stays disabled — set to 0 — because the cadence is
+  meant to show the visit, not one instant of it six times over.
+- What the cadence costs, stated where a reader will look for it: ~293 KB a frame is ~3.5 MB per
+  minute of motion on the uplink, and the shutter click hangs off frames actually written, so a
+  person in the room hears one click every 5 s rather than every 30 s (3.4).
 - **Pre-buffer**: a ring buffer of `PREBUFFER_FRAMES = 5` frames (1/s) kept from before the
   trigger. A detector by definition wakes up after motion has begun, and without the buffer the
-  first frame is a back in the doorway.
+  first frame is a back in the doorway. The manifest records how many frames of the event are
+  pre-buffer, because the poller has to be able to tell the run-up from the visit: those frames
+  are proof the room was empty, and five near-identical photographs of an empty room are not what
+  "send me the whole visit" meant.
 - **Which frame leads the alert.** The manifest names one `key_frame`, chosen by what the frame
   is worth as a photograph and not by how much of it changed. Raw change picks the wrong frame
   twice over: a light coming on in a dark room changes ~99 % of the pixels while the sensor is
@@ -236,10 +246,12 @@ two of the five tamper signals sound the siren. Everything else is shared.
   end to end still has to name its least bad frame, and a tamper event that carries no change at
   all leads with the trigger frame rather than with the oldest frame in the pre-buffer.
 - The event closes after `EVENT_GAP = 30 s` without motion.
-- `MAX_FRAMES_PER_EVENT = 60`. On truncation: a log line and `truncated: true` in the manifest.
-  Silent truncation is unacceptable — it reads as "everything was captured" when it was not.
+- `MAX_FRAMES_PER_EVENT = 240` — 20 minutes of a visit at the 5 s cadence, ~70 MB in the spool.
+  60 was half an hour at 30 s and is five minutes at 5 s, short enough that an ordinary cleaning
+  visit would truncate. On truncation: a log line and `truncated: true` in the manifest. Silent
+  truncation is unacceptable — it reads as "everything was captured" when it was not.
 - Artefacts: `evt_<utc_ts>_<nnn>.jpg` plus a manifest `evt_<utc_ts>.json` (start, end, frame
-  count, type, agent version, `truncated`).
+  count, `prebuffer`, type, agent version, `truncated`).
 
 ### 3.3 Tamper: the laptop is being handled (laptop)
 
@@ -502,6 +514,12 @@ camera down.
   whole thing exists for disappears together with the laptop. The cloud copy does not count as
   an acknowledgement: a successful `cp` only means the file landed in a sync folder, not that it
   reached the cloud — the sync client does not expose its upload state.
+- **One exception, and only for clip segments** (3.9): they have no receiver in their sink list at
+  all, so there is nothing that could ever acknowledge them, and holding them for ever would fill
+  the spool and push out the artefacts that DO have one. For those the warehouse copy is the
+  delivery. Whether a `cp` may free an artefact is a property of the ARTEFACT, not of what
+  happens to be configured — deriving it from the sink list made a run with only the warehouse
+  configured start deleting photographs on `cp`, which two tests caught.
 - An exception for a receiver that stays down: when `SPOOL_MAX_MB` is hit, frames already
   copied to the cloud folder are dropped first — they at least have some chance of surviving.
 - Retries with exponential backoff, capped at `UPLOAD_RETRY_MAX_SEC = 300`.
@@ -533,16 +551,37 @@ after: a trap running on battery with mute still set looks like it works and doe
 
 Cron every 2 minutes, in the style and discipline of the owner's external prober:
 
-- Pulls the list of new events from the VPS and sends the key frame to Telegram with a caption
-  (local time, event type, frame count). **One photograph, not an album** — `ALBUM_MAX = 1` since
-  2026-08-31: the frames that were not the key frame were never why anyone opened the alert, and
-  the complete event is on the receiver and in the warehouse either way. The album is still in the
-  script behind that number.
-- **One message per event.** The key frame also used to go a second time as an uncompressed
-  document, since Telegram re-encodes photos — dropped 2026-08-28 (`SEND_ORIGINAL = 0`): it
-  doubled the traffic per event for a copy nobody opens on a phone. Nothing is lost by it. The
-  untouched 1080p/q95 frame stays on the receiver and in the MEGA warehouse, which is where an
-  evidence-grade copy would be fetched from anyway; Telegram was only ever the notification.
+- Pulls the list of new events from the VPS and sends **every frame of the visit** to Telegram,
+  grouped: media groups of up to `STREAM_BATCH_MAX = 10` (Telegram's own ceiling), at most
+  `STREAM_BATCHES_MAX = 3` groups per event per pass, oldest frame first. The first group of an
+  event carries the full caption (local time, event type, signals, frame count); later groups say
+  which frames they are and that the visit continues. `STREAM = 0` restores the single-photograph
+  alert this replaced.
+- **The pre-buffer is not streamed.** It stays on the receiver as proof the room was empty; the
+  stream starts where the manifest's `prebuffer` says the visit does (3.2). On a manifest written
+  before that field existed, the `key_frame` stands in for the boundary.
+- **One alert per visit, not one per photograph.** A visit that is still running keeps delivering
+  as frames arrive, but only its first group counts against `MOTION_ALERTS_PER_HOUR` — otherwise
+  a cap meant to limit events would be exhausted by one long one. The high-water mark of frames
+  delivered is kept per event, so a frame is sent exactly once and a refused group is retried
+  rather than skipped.
+- **The alert never waits; the follow-ups behind it do.** A pass runs every 15 s and the cadence
+  writes a frame every 5 s, so an unconditional follow-up would send three frames every quarter
+  minute — four messages a minute for one visit, which is the complaint that shrank the cadence
+  three times over. A follow-up therefore goes out once it can fill a group
+  (`STREAM_MIN_BATCH = STREAM_BATCH_MAX`), or as soon as the event closes, or after
+  `STREAM_TAIL_SEC = 120 s` without a new frame. That last one is not a nicety: an event that
+  never closes is an agent that was carried off, and its last frames are the most interesting in
+  the spool. Nothing is dropped by the wait, and what is held is logged.
+- This reverses `ALBUM_MAX = 1` of 2026-08-31, which was itself the answer to a chat full of
+  near-identical albums. Both complaints are real and they are not in conflict: the fix for "too
+  many messages" is grouping, and the fix for "I cannot see what happened" is sending the frames.
+  Dropping frames answered the first by giving up the second.
+- The key frame also used to go a second time as an uncompressed document, since Telegram
+  re-encodes photos — dropped 2026-08-28 (`SEND_ORIGINAL = 0`): it doubled the traffic per event
+  for a copy nobody opens on a phone. Nothing is lost by it. The untouched 1080p/q95 frame stays
+  on the receiver and in the MEGA warehouse, which is where an evidence-grade copy would be
+  fetched from anyway; Telegram was only ever the notification.
 - A `tamper` event → 🚨 as its own message ahead of the queue: the key frame, the list of signals
   that fired, local time, and whether the siren played.
 - A `tamper` event carrying `power_button_pressed` gets **its own wording**: 🆘 and "POWER BUTTON
@@ -584,6 +623,76 @@ this machine. For `GRACE_AFTER_UNLOCK_SEC` after it, tamper does not fire and th
 play: otherwise the owner, back in the room to collect the laptop, would get a siren out of the
 case every time they picked it up. Capture continues throughout — only an explicit
 `camtrap pause` stops frames.
+
+---
+
+### 3.9 Clip of the visit (laptop)
+
+Added 2026-09-03 on the owner's instruction: a photograph every 5 s shows what happened twelve
+times a minute, and a clip shows it three hundred times. It does not replace the photographs and
+cannot — see below.
+
+- **Fed from the frames the run loop has already decoded.** A webcam streams to ONE reader, so a
+  second ffmpeg on `/dev/video0` would get nothing. That fixes the clip's rate at
+  `camera.target_fps` (5) and means the clip costs no extra capture.
+- **The run loop never blocks on the encoder.** Frames cross to ffmpeg through a bounded queue
+  and a writer thread; when the queue is full the frame is dropped and counted. Tamper polling,
+  the siren and the heartbeat live in that loop — "losing the eyes must not cost the ears"
+  applies to the encoder too. The queue holds 5 frames (a second) because ffmpeg needs ~200 ms to
+  spawn and initialise libx264, and a shorter queue put the gap at the START of every clip: the
+  frames of someone coming through the door.
+- **Segments, not one file.** `SEGMENT_SEC = 15`, and three reasons: a killed process loses at
+  most 15 s instead of everything (an mp4 whose `moov` box was never written does not play at
+  all); each closed segment travels on its own, so the clip does not wait for the visit to end;
+  and 15 s is ~750 KB, inside the 8 MiB per artefact a receiver accepts should one ever be put
+  back in this path. A segment counts as finished when a LATER one exists and the file carries
+  the `moov` box that is written on close — both, so that the last segment of a killed run is
+  discarded rather than shipped as unplayable evidence.
+- `CLIP_SEC = 60` from the trigger. A visit that outlasts it carries on in photographs.
+- **`VIDEO_SINKS = ["mega", "telegram"]` — the receiver is deliberately out of this path**, on
+  the owner's instruction. Its inbox cap of 512 MB was already 314 MB of photographs on a VPS with 6.0 GB
+  free that also runs another project's production, and a stream of segments would evict them.
+  The warehouse copy is the durable one and the chat is the delivery; a `cp` into a watched
+  folder is not a delivery, which is why the acknowledgement comes from Telegram.
+- **The manifest announces the clip** (`clip_segments`, `clip_bytes`, `clip_frames_dropped`) and
+  the alert repeats it. Written before the clip went to the chat and kept afterwards: the numbers
+  are how the photograph stream and the video line up, and how a clip that never made it out of
+  the warehouse is still findable.
+- **No audio, twice over**: the input is a raw video pipe, so there is no audio stream to
+  capture, and `-an` says so again. Both are asserted by tests, one of them against the artefact
+  through `ffprobe`. This is the one promise in the README a court might care about.
+- Measured through this camera in a lit room at 1080p/5fps: **2.97 MB per minute of clip**
+  against 3.12 MB for the twelve photographs of the same minute. `MAXRATE = 1200 kbit/s` bounds
+  a dark, grainy room at three times the lit norm — what the encoder spends its bits on in a
+  still room is sensor grain, not content.
+- `guard check` really encodes: six frames through the real argv, looking for a playable segment.
+  It catches an ffmpeg built without libx264, where every check short of encoding says yes. It
+  also reports whether the chat is reachable-in-principle — token file present and mode 600 — and
+  the heartbeat carries `telegram_ok` for the same reason `sound_ok` is in there: unreadiness has
+  to be visible before the event, on a machine that may be walking out of the room. A failure is
+  a warning rather than a blocker; the photographs do not go through this path at all.
+
+**How the clip reaches the chat: from the laptop, `sendVideo`, one segment per message.** The
+owner's decision of 2026-09-03, overriding the token rule in section 8 — see there for what it
+costs and what bounds it. Each segment goes as it closes rather than as one clip at the end of
+the visit, which is both simpler and better: the first 15 s are in the chat while the person may
+still be in the room, and no segment has to be held back in the spool waiting for the visit to
+finish so it can be concatenated.
+
+That gives clip segments something the warehouse never could: **an acknowledgement**. Telegram
+answering `ok:true` means the bytes are off this machine and something outside it said so, so a
+segment now waits for that exactly as a photograph waits for the receiver, and the "a copy frees
+it" exception above applies only to a clip configured with no acknowledging sink at all. Sent as
+`sendVideo` rather than `sendDocument`, so it plays inline; Telegram re-encodes it, and the
+untouched original stays in the warehouse, which is the same trade `SEND_ORIGINAL = 0` made for
+photographs on 2026-08-28.
+
+Two practical notes. `api.telegram.org` is not reachable from the owner's home network at all —
+that is why the Pi relays through the VPS — so this path cannot be rehearsed at home, and the
+sink gets a 5 s connect timeout plus its own exponential backoff so a dead network costs the run
+loop seconds every few minutes rather than seconds every second. And a segment over
+`TELEGRAM_MAX_MB = 45` is refused here rather than by Telegram at 50, so a hotel uplink is not
+spent on a request that ends in a rejection.
 
 ---
 
@@ -797,7 +906,32 @@ sequence kept for regression.
 
 ### Never
 
-- Do not store the Telegram token on the laptop or on the VPS. The Pi only.
+- Do not store the Telegram token on the VPS, and store one on the laptop only under the
+  conditions below. **This rule was absolute until 2026-09-03**, when the owner overrode it so
+  that clips could be sent from the laptop directly (3.9). The reason it existed does not go
+  away and is worth keeping in front of whoever reads this next: a bot can delete its own
+  messages for 48 hours, so a token on a machine assumed to be in a thief's hands means whoever
+  carries the laptop out can clear what that bot sent and post a false all-clear in its place.
+
+  A bot of its own would bound that to the clips alone, and it is what
+  `deploy/telegram.env.example` still recommends for any fresh install. **The owner declined it
+  on 2026-09-03 and configured the shared bot instead**, so the deployed exposure is written down
+  here rather than left to be rediscovered: the laptop holds the token of the SAME bot the Pi's
+  poller sends the photograph alerts with, which is also the bot an unrelated project on that
+  chat uses for its own scheduled messages to a group. For 48 hours, whoever carries the laptop
+  out can therefore delete the photograph alerts and those group messages as well as the clips,
+  and post as that bot into that group.
+
+  What the exposure does NOT reach is the record, and that is the part worth keeping straight:
+  the photographs are acknowledged by a receiver the laptop cannot delete from, and every clip
+  segment is in the warehouse verbatim. Deleting the chat destroys no evidence. What is lost is
+  the notification trail — which is exactly why "nothing arrived in Telegram" is diagnosed
+  against the receiver and the warehouse, never against the chat.
+
+  Regardless of which bot: the token lives in `~/.config/camtrap/telegram.env`, mode 600, created
+  600 rather than chmod'ed afterwards, and the agent refuses to read it if anyone else can. It
+  never appears in `argv`, because `/proc` is world-readable and `curl https://…/bot<TOKEN>/…`
+  would publish it to every process on the machine — it goes in on stdin.
 - Do not reuse the existing ssh keys of another project's monitoring: camtrap creates its own.
 - Do not record audio. Playing is fine, capturing is not, and that does not change.
 - Do not play the siren on ordinary motion or on a lighting change, while `paused`, during

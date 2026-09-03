@@ -105,23 +105,28 @@ class DetectorConfig:
 @dataclass
 class EventConfig:
     # One frame the moment the event opens, then one every snapshot_interval_sec for as long as
-    # the event stays open. 5 s -> 10 s -> 30 s, each step on the owner's instruction after living
-    # with the one before: at 5 s with the boost on, a two-minute event produced dozens of
-    # near-identical frames and the album that reached Telegram was six views of the same second;
-    # at 10 s the number of photographs was still the complaint. Paired with the poller's
-    # ALBUM_MAX = 1, so a visit is one photograph in the chat and a handful of frames on the
-    # receiver.
+    # the event stays open. 5 s -> 10 s -> 30 s -> back to 5 s, and the round trip is the lesson:
+    # the three cuts were all answers to "a visit produced more photographs than anyone would look
+    # at", which is a complaint about the CHAT, and each one paid for it out of the RECORD. At 30 s
+    # the bill came due — a visit shorter than half a minute had exactly one frame, the trigger
+    # frame, which by construction catches a back in a doorway.
     #
-    # What the long cadence costs, said where the knob is: `key_settle_sec` discounts the first
-    # 5 s of an event because the trigger frame catches a back in a doorway and the face arrives
-    # a few seconds later. At 30 s the next candidate lands at +30 s, so a visit shorter than that
-    # has only the discounted trigger frame to lead with. Lower this — or lower `key_settle_sec` —
-    # if alert photographs start arriving too early to show a face.
-    snapshot_interval_sec: float = 30.0
+    # The two are separate knobs again. Density lives here; how loud the chat is lives in the
+    # poller, which now streams the frames of an open event in groups instead of alerting once per
+    # event (`STREAM`, `STREAM_BATCH_MAX`). Twelve frames a minute reach the receiver, and they
+    # arrive in the chat as one message per group of up to ten.
+    #
+    # What this cadence costs, said where the knob is: ~293 KB a frame is 3.5 MB per minute of
+    # motion on the uplink, and the shutter clicks on every frame written, so a person in the room
+    # now hears one click every 5 s rather than every 30 s.
+    snapshot_interval_sec: float = 5.0
     prebuffer_frames: int = 5
     prebuffer_interval_sec: float = 1.0
     event_gap_sec: float = 30.0
-    max_frames_per_event: int = 60
+    # 60 was 30 minutes of a visit at the old 30 s cadence and is 5 minutes at 5 s — short enough
+    # that an ordinary cleaning visit would hit it and truncate. 240 covers 20 minutes and costs
+    # ~70 MB in the spool at 293 KB a frame; the cap and the retention below are what bound it.
+    max_frames_per_event: int = 240
     # 95, not 85: this frame may end up in front of a police officer looking at a face. The extra
     # 120 KB is worth more than the disk it costs.
     jpeg_quality: int = 95
@@ -214,10 +219,10 @@ class SoundConfig:
     # A voice argues with the person in the room; a shutter only reports a fact, which is why it
     # survived the cut that took stage 1 out.
     #
-    # At the shipped cadence this is one click every 10 s for as long as someone is in frame.
+    # At the shipped cadence this is one click every 5 s for as long as someone is in frame.
     shutter_on_capture: bool = True
     shutter_volume_pct: int = 85
-    # Floor between two clicks. The cadence already spaces them 10 s apart; this exists for the
+    # Floor between two clicks. The cadence already spaces them 5 s apart; this exists for the
     # tamper burst, which writes a frame a second and would otherwise machine-gun the room.
     shutter_min_interval_sec: float = 2.0
     # Kill timeout for a hung player on a 0.3 s file. Nothing should ever reach it.
@@ -345,6 +350,90 @@ class UploadConfig:
 
 
 @dataclass
+class VideoConfig:
+    """A clip of the visit, alongside the photographs rather than instead of them.
+
+    The photograph is the alert and the evidence of a face: 1080p at quality 95, acknowledged by
+    the receiver, and it is what the siren waits for. The clip is the sequence — what the person
+    did, in what order — and it cannot do the alert's job, because it does not exist as a file
+    until its first segment closes.
+
+    Measured through this camera at 1080p and 5 fps, in a lit room: **2.97 MB per minute of clip**
+    against 3.12 MB for the twelve photographs of the same minute. So the clip roughly doubles
+    what a minute of motion costs, and buys 300 frames where the photographs give 12.
+
+    Two things about that number, because both were surprises. Extrapolating from real frames 5 s
+    apart predicted 5.3 MB — nearly double the truth: at 200 ms apart inter-frame prediction works
+    and at 5 s apart it does not. And what the encoder spends its bits on in a still room is
+    sensor grain rather than content, which is why resolution is the lever that works (720p
+    measured 1.9 MB a minute against 1080p's 5.3 on the same frames, a 2.8x cut) and denoising is
+    not (1.3x). 1080p is the owner's call: the clip is then evidence in its own right rather than
+    a thumbnail of the visit.
+    """
+
+    enabled: bool = True
+    #: One minute from the trigger, on the owner's instruction. A visit that outlasts it keeps
+    #: producing photographs; this bounds what one event can cost. Raise it for a longer clip.
+    clip_sec: float = 60.0
+    #: Segments, not one file, and three reasons rather than one: a killed process loses at most
+    #: this much instead of the whole clip (an mp4 without its moov atom does not play at all);
+    #: each closed segment is a complete artefact that can travel on its own, so the clip does not
+    #: wait for the visit to end; and 15 s at 1080p is ~1.3 MB, well inside the 8 MiB the receiver
+    #: accepts per artefact, should a receiver ever be put back in this path.
+    segment_sec: float = 15.0
+    #: The encoder is fed the frames the run loop has already decoded, so this is not a request —
+    #: it is what `camera.target_fps` delivers. A second ffmpeg reading /dev/video0 is not an
+    #: option: a webcam streams to one reader.
+    fps: int = 5
+    crf: int = 28
+    #: Hard ceiling, because the floor is not the worry. A dark, grainy room encodes to several
+    #: times what a lit one does, and the honest bound on "what can one night cost" has to be a
+    #: number rather than a hope.
+    #:
+    #: Set from the measurement rather than picked: a lit room runs at ~400 kbit/s (2.97 MB a
+    #: minute), so 1200 lets a dark one have three times that before the encoder starts trading
+    #: detail for the cap — 9 MB a minute, which is a bounded night. A ceiling six times the norm
+    #: bounds nothing anyone would notice going wrong.
+    maxrate_kbps: int = 1200
+    preset: str = "veryfast"
+    #: 0 keeps the camera's own geometry. Set to 1280 for the 720p clip that costs a third.
+    scale_width: int = 0
+    ffmpeg_cmd: list[str] = field(default_factory=lambda: ["ffmpeg"])
+    #: Frames the hand-off to the encoder may hold. The run loop must NEVER block on the encoder:
+    #: tamper polling, the siren and the heartbeat all live in that loop, and "losing the eyes must
+    #: not cost the ears" applies to losing the encoder too. A full queue drops the frame and
+    #: counts it — a dropped frame is a gap in a clip, a blocked loop is a trap that stopped.
+    #:
+    #: 5, not 2, and the reason is measured: ffmpeg needs ~200 ms to spawn and initialise libx264
+    #: before it reads anything, while two frames at 5 fps is 400 ms of slack. That put the hole
+    #: at the START of every clip — the frames of someone coming through the door, which are the
+    #: ones least worth losing. Five frames is a second of slack and 31 MB of 1080p in memory.
+    queue_frames: int = 5
+    #: Where clips go. Deliberately NOT the receiver: on the owner's instruction the receiver is
+    #: out of this path, and its inbox cap of 512 MB was already 314 MB full of photographs that
+    #: a clip stream would evict.
+    #:
+    #: `telegram` sends each segment from the LAPTOP as it closes, which is the owner's decision
+    #: of 2026-09-03 overriding the rule in spec section 8 that kept the bot token off this
+    #: machine. What it buys, beyond the clip being in the chat: Telegram answering `ok:true` is a
+    #: real delivery, so a segment finally has something to be acknowledged by. Before this the
+    #: warehouse copy had to free it, and a `cp` into a watched folder is not a delivery.
+    sinks: list[str] = field(default_factory=lambda: ["mega", "telegram"])
+    #: An env-style file, `TELEGRAM_BOT_TOKEN=` and `TELEGRAM_CHAT_ID=`, one per line. A file
+    #: rather than a config key so the token stays out of a config that gets copied around and
+    #: pasted into issues, and so its permissions can be checked independently — this is read
+    #: only if the mode is 600, the way ssh refuses a group-readable key.
+    telegram_env_file: str = ""  # empty => ~/.config/camtrap/telegram.env
+    #: Telegram's own ceiling for a bot upload is 50 MB. Refuse earlier and say so, rather than
+    #: spending a hotel uplink on a request that will be rejected.
+    telegram_max_mb: int = 45
+    telegram_timeout_sec: float = 120.0
+    curl_cmd: list[str] = field(default_factory=lambda: ["curl"])
+    start_timeout_sec: float = 5.0
+    stop_timeout_sec: float = 10.0
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
@@ -354,6 +443,7 @@ class Config:
     sound: SoundConfig = field(default_factory=SoundConfig)
     arming: ArmingConfig = field(default_factory=ArmingConfig)
     upload: UploadConfig = field(default_factory=UploadConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
     state_dir: str = ""  # empty => data_dir()
     log_ticks: bool = False
     #: Where the agent writes its own journal. Empty means stdout only. Set by `guard` so that
@@ -392,6 +482,36 @@ class Config:
     @property
     def mega_dir(self) -> Path:
         return Path(self.upload.mega_dir) if self.upload.mega_dir else Path.home() / "MEGA/camtrap"
+
+    @property
+    def sink_names(self) -> list[str]:
+        """Every sink the uploader should build, in priority order.
+
+        Two lists feed it and they are about different artefacts: `upload.sinks` is where
+        photographs go, `video.sinks` where clip segments go. The uploader needs the union — it
+        decides per artefact which of them to actually ask (`Uploader._sinks_for`).
+        """
+        names: list[str] = []
+        for name in [*self.upload.sinks, *self.video.sinks]:
+            if name not in names:
+                names.append(name)
+        return names
+
+    @property
+    def telegram_env_path(self) -> Path:
+        if self.video.telegram_env_file:
+            return Path(self.video.telegram_env_file)
+        return config_path().parent / "telegram.env"
+
+    @property
+    def video_staging_dir(self) -> Path:
+        """Where ffmpeg writes segments before they are complete.
+
+        Not the spool: the uploader lists the spool and would send a segment ffmpeg is still
+        writing into. A segment moves here-to-there once the encoder has moved on to the next
+        one, which is the only signal the segment muxer gives that a file is finished.
+        """
+        return self.root / "video"
 
     @property
     def mode_file(self) -> Path:

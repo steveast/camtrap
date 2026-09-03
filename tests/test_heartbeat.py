@@ -176,3 +176,32 @@ def test_no_receiver_configured_is_reported_once_not_every_tick(cfg, capsys):
         sender.maybe_send(heartbeat, now=tick * 0.25)
     out = capsys.readouterr().out
     assert out.count("heartbeat_skip") == 1
+
+
+def test_a_sink_that_cannot_deliver_says_so_in_the_heartbeat(cfg, tmp_path):
+    """Unreadiness has to be visible BEFORE the event, on the machine that may walk out.
+
+    `sound_ok` is here for exactly this reason. A missing or group-readable Telegram token means
+    clips silently never reach the chat, and the only other trace would be a line in a log file
+    on the laptop.
+    """
+    from camtrap.uploader import TelegramSink, Uploader
+
+    cfg.video.telegram_env_file = str(tmp_path / "absent.env")
+    uploader = Uploader(cfg, Spool(cfg), sinks=[TelegramSink(cfg)])
+    line = build(cfg, started=0.0, now=10.0, uploader=uploader).render()
+    assert "telegram_ok=0" in line
+    assert "absent.env" in line
+
+
+def test_a_ready_sink_reports_ready(cfg, tmp_path):
+    from camtrap.uploader import TelegramSink, Uploader
+
+    env = tmp_path / "telegram.env"
+    env.write_text("TELEGRAM_BOT_TOKEN=1:A\nTELEGRAM_CHAT_ID=7\n")
+    env.chmod(0o600)
+    cfg.video.telegram_env_file = str(env)
+    uploader = Uploader(cfg, Spool(cfg), sinks=[TelegramSink(cfg)])
+    line = build(cfg, started=0.0, now=10.0, uploader=uploader).render()
+    assert "telegram_ok=1" in line
+    assert "telegram_why" not in line, "no reason is given when there is nothing wrong"

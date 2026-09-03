@@ -12,7 +12,7 @@ camtrap siren-test                    # loud, from the built-in speakers
 camtrap warn-test                     # intelligible in the local language
 ```
 
-Four things that are easy to skip and expensive to skip:
+Five things that are easy to skip and expensive to skip:
 
 1. **Have a native speaker listen to the warning.** `espeak-ng` is a formant synthesiser and both
    Vietnamese and Thai are tonal; nobody on this side of the screen can judge whether the result
@@ -24,6 +24,17 @@ Four things that are easy to skip and expensive to skip:
    and ends the siren with one keystroke.
 4. **Decide the languages** — `sound.warn_langs = ["vi", "en"]` for Vietnam, `["th", "en"]` for
    Thailand. Local language first; English alone is a coin flip with housekeeping.
+5. **Put a bot token in `~/.config/camtrap/telegram.env`.** This is the file that lets the laptop
+   send clips to the chat itself. A bot of its own is the recommendation, and it is not tidiness:
+   a bot can delete its own messages for 48 hours, so whoever carries the laptop out can clear
+   what that bot sent. **Currently configured with the SHARED bot** on the owner's decision, so
+   that reach includes the photograph alerts and another project's group messages — see SPEC
+   section 8. What it does not reach is the record: the photographs are acknowledged by a
+   receiver the laptop cannot delete from, and the clip segments are in the warehouse verbatim. `camtrap selftest` shows the `video` row as a warning
+   if the file is missing or readable by anyone but you, and the heartbeat carries `telegram_ok`.
+   **This cannot be rehearsed at home:** `api.telegram.org` is unreachable from the home network
+   entirely, which is why the Pi relays through the VPS. Expect the `video` row to say the token
+   is fine and the first real clip to arrive only once you are on hotel wifi.
 
 ## Every time you leave the room
 
@@ -159,6 +170,34 @@ Two traps in this particular failure, both deliberate elsewhere in the design:
 - **`paused` suppresses the "agent went silent" alert.** So a run that is armed but cannot check
   in looks exactly like a laptop that is deliberately switched off, and nothing raises a hand.
   After `camtrap resume`, confirm a 🛡 actually arrives.
+
+## When the photographs arrive but the clips do not
+
+The clip path is separate from the photograph path on purpose, and it fails separately. Clips go
+from the laptop straight to the chat and into `~/MEGA/camtrap/`; the receiver is not in that path
+at all, so nothing about a clip is diagnosed on the VPS or the Pi.
+
+```sh
+guard report                                  # clip counters
+grep -c clip_segment ~/.local/share/camtrap/agent.log
+ls ~/.local/share/camtrap/spool/*.mp4 2>/dev/null | wc -l
+ls ~/MEGA/camtrap/*.mp4 | tail -5
+```
+
+| Symptom | Meaning | Fix |
+|---|---|---|
+| `telegram_ok=0` in the heartbeat, `video` row warns | no token file, or it is readable by others | create `~/.config/camtrap/telegram.env`, `chmod 600` |
+| `upload_failed sink=telegram why="telegram refused: …401…"` | the token is wrong | check it against @BotFather |
+| `…"chat not found"` | the chat id is wrong, or the bot has never been messaged from that account | send the bot one message from the receiving account first |
+| `curl rc=7` / `rc=28` | the network cannot reach Telegram — a blocking network, or hotel wifi | nothing to fix on the trap; the segments wait in the spool and the warehouse copies are already written |
+| `.mp4` files piling up in the spool | segments waiting for an acknowledgement that has not come | expected while Telegram is unreachable. They are droppable under the spool cap, and dropping one costs the sequence, not the evidence — the photographs are acknowledged and the warehouse copies survive |
+| `clip_drops` above zero in the heartbeat | the machine could not keep up with the encoder | holes in the clip, nothing else; raise `video.queue_frames` or lower `video.crf` |
+| `video` row says "encoder produced nothing" | ffmpeg is there but cannot encode H.264 | `ffmpeg -encoders \| grep libx264` |
+
+One thing worth knowing before it surprises you: **a clip does not exist as a file until its
+first segment closes**, fifteen seconds in. If the laptop leaves the room in under fifteen
+seconds there is no clip at all — which is exactly why the photographs, not the clip, are what
+the alert leads with and what the siren waits for.
 
 ## If the siren is going off right now and should not be
 

@@ -38,6 +38,17 @@ class Event:
     sound_latency_ms: int | None = None
     sound_evidence_confirmed: bool = False
     boosted_frames: int = 0
+    #: How many frames of this event are pre-buffer — the run-up, written before the trigger.
+    #: The poller streams the frames of an open event to the chat and needs to know where the
+    #: event proper starts: these are the room a few seconds BEFORE anything happened, worth
+    #: keeping as proof it was empty and not worth sending as five near-identical photographs.
+    prebuffer_count: int = 0
+    #: What the clip of this visit came to. The clip itself never reaches the receiver — it is a
+    #: warehouse artefact by configuration — so the manifest is the only place an alert can learn
+    #: that it exists and how much of it there is.
+    clip_segments: int = 0
+    clip_bytes: int = 0
+    clip_frames_dropped: int = 0
     #: The frame worth looking at, and what it scored. NOT simply the most changed one: the
     #: first frame by number is the OLDEST pre-buffer frame — an empty room five seconds before
     #: anything happened — and the MOST CHANGED one is often the moment a light came on, which is
@@ -121,6 +132,9 @@ class EventWriter:
         prebuffer = [] if event.single_frame else list(self._ring)
         for when, buffered in prebuffer:
             self._write_frame(event, buffered, now=when, throttled=False)
+        # Counted from what actually reached the disk, not from the ring: a frame that failed to
+        # write does not shift the index the stream starts at.
+        event.prebuffer_count = event.frames_written
 
         trigger = frame if frame is not None else (self._ring[-1][1] if self._ring else None)
         if trigger is not None:
@@ -203,6 +217,17 @@ class EventWriter:
         self.active.sound_latency_ms = latency_ms
         self.active.sound_evidence_confirmed = evidence_confirmed
         self._write_manifest(self.active)
+
+    def mark_clip(self, event: Event, *, segments: int, size: int, dropped: int) -> None:
+        """Record the clip in the event's manifest, open or closed.
+
+        Takes the event explicitly rather than using `self.active`: this is called after the
+        clip is closed, which is after the event is, so there is no active event left to name.
+        """
+        event.clip_segments = segments
+        event.clip_bytes = size
+        event.clip_frames_dropped = dropped
+        self._write_manifest(event)
 
     def maybe_close(self, *, now: float) -> Event | None:
         event = self.active
@@ -302,6 +327,11 @@ class EventWriter:
             "ended": event.started_wall + max(0.0, (event.ended or event.started) - event.started),
             "frames": event.frames_written,
             "boosted_frames": event.boosted_frames,
+            # Where the event proper starts, for the poller's stream. See `prebuffer_count`.
+            "prebuffer": event.prebuffer_count,
+            "clip_segments": event.clip_segments,
+            "clip_bytes": event.clip_bytes,
+            "clip_frames_dropped": event.clip_frames_dropped,
             # The frame worth sending: most changed, not oldest.
             "key_frame": f"{event.event_id}_{event.key_index:03d}.jpg",
             "key_changed_pct": round(event.key_changed_pct, 2),

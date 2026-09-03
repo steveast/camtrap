@@ -30,6 +30,7 @@ from .inhibit import Inhibitor
 from .player import SoundResponder, Stage
 from .spool import Spool
 from .uploader import Uploader
+from .video import ClipRecorder
 
 
 @dataclass
@@ -60,6 +61,7 @@ class Runner:
         spool: Spool | None = None,
         camera: Camera | None = None,
         uploader: Uploader | None = None,
+        clips: ClipRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -72,6 +74,7 @@ class Runner:
         self.events = events if events is not None else EventWriter(cfg)
         self.spool = spool if spool is not None else Spool(cfg)
         self.uploader = uploader if uploader is not None else Uploader(cfg, self.spool)
+        self.clips = clips if clips is not None else ClipRecorder(cfg)
         self.heartbeat = HeartbeatSender(cfg, self.uploader)
         self.camera = camera
         self.started = 0.0
@@ -94,6 +97,9 @@ class Runner:
         #: (the pre-buffer, the trigger, the throttle, the tamper burst) and a click owed from
         #: any of them is the same click.
         self._clicked_frames = 0
+        #: Which event the clip recorder is following, so an event does not restart its own clip
+        #: on every frame — `begin` resets the one-minute deadline.
+        self._clip_event: str | None = None
         self.responder.set_ack_waiter(self._await_evidence)
         self._power_grab: object | None = None
         self.responder.set_gate(self.arming.gate)
@@ -107,6 +113,11 @@ class Runner:
         if self.events.active is not None:
             closed = self.events.close(now=self.clock())
             log.emit("event_flush", id=closed.event_id, frames=closed.frames_written)
+            self._clip_close(closed, now=self.clock())
+        else:
+            # Nothing open, but a clip may still hold a segment: closing the encoder is what
+            # makes the last one playable, and this is the last chance to do it.
+            self.clips.finish(now=self.clock(), reason="shutdown")
         # One last drain attempt: frames already acknowledged are gone, the rest stay spooled.
         self.uploader.drain(now=self.clock(), limit=32)
 
@@ -279,12 +290,51 @@ class Runner:
         else:
             self.events.feed(frame, now=now, changed_pct=detection.changed_pct)
 
+        self._clip_follow(frame, now=now)
         self._click_if_photographed(now)
         closed = self.events.maybe_close(now=now)
         if closed is not None:
             self.responder.end_event()
+            self._clip_close(closed, now=now)
         self._housekeeping(now)
         return detection.kind
+
+    def _clip_follow(self, frame: np.ndarray, *, now: float) -> None:
+        """Keep the clip in step with the event: start it, feed it, and never wait for it.
+
+        EVERY analysed frame goes in, not only the ones the throttle writes as photographs. That
+        is the whole difference between the clip and the photograph stream: 5 frames a second
+        against one every five seconds, 300 frames of a minute against twelve.
+
+        A `light` event is skipped — it is one frame by definition (spec 3.1), and there is no
+        sequence to record.
+        """
+        event = self.events.active
+        if event is None or event.single_frame:
+            return
+        if self._clip_event != event.event_id:
+            self._clip_event = event.event_id
+            self.clips.begin(event.event_id, now=now)
+        self.clips.submit(frame, now=now)
+
+    def _clip_close(self, event, *, now: float) -> None:
+        """Close the clip with the event and write what it came to into the manifest.
+
+        The clip never reaches the receiver, so the manifest is the only way an alert can say
+        that it exists — which is what makes it findable in the warehouse later.
+        """
+        if self._clip_event != event.event_id:
+            return
+        self._clip_event = None
+        self.clips.finish(now=now, reason="event_end")
+        status = self.clips.status
+        if status.segments_ready or status.frames_dropped:
+            self.events.mark_clip(
+                event,
+                segments=status.segments_ready,
+                size=status.bytes_ready,
+                dropped=status.frames_dropped,
+            )
 
     def _await_evidence(self, timeout: float) -> bool:
         """Get the picture off the box before the room gets loud — but never wait long.
@@ -411,6 +461,9 @@ class Runner:
     def _housekeeping_inner(self, now: float) -> None:
         if now - self._last_drain >= self.cfg.spool.drain_interval_sec:
             self._last_drain = now
+            # Segments first, so a segment that closed since the last pass is in the spool before
+            # the drain lists it rather than a second behind.
+            self.clips.tick(now=now)
             self.uploader.drain(now=now, limit=8)
         if self.heartbeat.due(now=now):
             self.heartbeat.maybe_send(
@@ -423,6 +476,8 @@ class Runner:
                     arming=self.arming,
                     spool=self.spool,
                     camera=self.camera,
+                    clips=self.clips,
+                    uploader=self.uploader,
                 ),
                 now=now,
             )

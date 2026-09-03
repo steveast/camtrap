@@ -29,20 +29,35 @@ class _Entry:
     mtime: float
 
 
-def _event_id(name: str) -> str:
+#: What an artefact is, from its name alone. Three kinds share the spool and they are not
+#: interchangeable: `evt_<ts>.json` is the manifest, `evt_<ts>_<nnn>.jpg` a photograph,
+#: `evt_<ts>_v<nnn>.mp4` a clip segment.
+MANIFEST = "manifest"
+FRAME = "frame"
+CLIP = "clip"
+
+
+def _parts(name: str) -> tuple[str, str, int | None]:
+    """(event id, kind, index). The index is None for a manifest and for anything unrecognised."""
     stem = name.rsplit(".", 1)[0]
-    if "_" in stem and stem.rsplit("_", 1)[1].isdigit():
-        return stem.rsplit("_", 1)[0]
-    return stem
+    if name.endswith(".json"):
+        return stem, MANIFEST, None
+    if "_" in stem:
+        head, tail = stem.rsplit("_", 1)
+        if tail.isdigit():
+            return head, FRAME, int(tail)
+        if tail.startswith("v") and tail[1:].isdigit():
+            return head, CLIP, int(tail[1:])
+    return stem, MANIFEST, None
+
+
+def _event_id(name: str) -> str:
+    return _parts(name)[0]
 
 
 def _frame_index(name: str) -> int | None:
-    stem = name.rsplit(".", 1)[0]
-    if "_" in stem:
-        tail = stem.rsplit("_", 1)[1]
-        if tail.isdigit():
-            return int(tail)
-    return None
+    _event, kind, index = _parts(name)
+    return index if kind == FRAME else None
 
 
 class Spool:
@@ -99,13 +114,15 @@ class Spool:
 
     def _sort_key(self, path: Path) -> tuple:
         name = path.name
-        event = _event_id(name)
-        index = _frame_index(name)
-        is_manifest = name.endswith(".json")
+        event, kind, index = _parts(name)
         return (
             0 if event in self._tamper else 1,  # tamper first
-            0 if is_manifest else 1,  # then the manifest
-            0 if index == 0 else 1,  # then the first frame
+            0 if kind == MANIFEST else 1,  # then the manifest
+            0 if (kind == FRAME and index == 0) else 1,  # then the first frame
+            # Photographs ahead of clip segments of the same event. The photograph is the alert
+            # and the thing a receiver acknowledges; a segment is the record behind it and is
+            # twenty times the bytes, so sending it first would delay the alert on a slow link.
+            0 if kind == FRAME else 1,
             index if index is not None else 0,
             name,
         )
@@ -126,12 +143,20 @@ class Spool:
         return True
 
     def _droppable(self, entries: list[_Entry]) -> list[_Entry]:
-        """Mid-event frames, cloud-copied ones first. Manifests and first frames are excluded."""
+        """Mid-event frames and segments, cloud-copied first. Never a manifest or a first frame.
+
+        A clip segment is droppable for the same reason a mid-event frame is, only more so: it is
+        an order of magnitude more bytes than a photograph and the photographs are what the alert
+        and the evidence rest on. Losing a segment costs the sequence; losing the first frame of
+        an event costs knowing that anyone was there.
+        """
         candidates = [
             entry
             for entry in entries
-            if not entry.path.name.endswith(".json")
-            and _frame_index(entry.path.name) not in (0, None)
+            if _parts(entry.path.name)[1] != MANIFEST
+            and not (
+                _parts(entry.path.name)[1] == FRAME and _parts(entry.path.name)[2] in (0, None)
+            )
         ]
         candidates.sort(
             key=lambda entry: (

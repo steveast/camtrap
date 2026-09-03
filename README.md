@@ -11,7 +11,7 @@ A camera trap running on a laptop, for a hotel room you have to leave your thing
 - **Anything else** — someone in the room, the case lifted, the power button pressed, the camera
   unplugged → photographed, uploaded and alerted, with **no alarm**. What it does make is a
   camera-shutter click, once per frame taken, which at the shipped cadence is one click every
-  30 s for as long as someone is in frame. It says "you are being photographed" in no language
+  5 s for as long as someone is in frame. It says "you are being photographed" in no language
   and is over in a third of a second.
 
 That split is deliberate and was narrowed after the first night of real use: the person most
@@ -24,16 +24,22 @@ line away — the warning is built, tested and shipped, just switched off (`soun
 `sound.shutter_on_capture`, `tamper.siren_signals`).
 
 Alongside that it works as a recorder: motion detection through the built-in webcam, a snapshot
-at once and then every 30 s for as long as the visit lasts, immediate off-box upload, and a
-Telegram alert with the photo and
-an exact timestamp — the kind of evidence that turns "I think something is missing" into a
-concrete conversation with hotel management and a usable police report.
+at once and then every 5 s for as long as the visit lasts, immediate off-box upload, and a
+Telegram alert carrying those frames — grouped, up to ten per message, so a visit arrives as a
+sequence rather than as one photograph or as thirty notifications — with an exact timestamp. That
+is the kind of evidence that turns "I think something is missing" into a concrete conversation
+with hotel management and a usable police report.
 
-It is not a lock. It does not record video, never records audio, recognises no faces, and keeps
-no database of people.
+It is not a lock. It never records audio, recognises no faces, and keeps no database of people.
+Since 2026-09-03 it does record video: a one-minute clip of each visit, alongside the photographs
+rather than instead of them — 300 frames of the sequence where the photographs give twelve of the
+faces. The clip is written in 15-second segments, each one sent to Telegram from the laptop as it
+closes and kept verbatim in the cloud folder. The photographs are still what the alert leads with
+and what the siren waits for, because a clip does not exist as a file until its first segment
+closes, and by then the laptop may already be out of the room.
 
 **Status: phase 1 implemented.** The agent, the receiver scripts and the poller are in place
-with 185 tests; what remains is physical — a siren heard in a real room, a native speaker
+with 402 tests; what remains is physical — a siren heard in a real room, a native speaker
 confirming the warning, and a 24-hour run in an empty one. See [tasks/todo.md](tasks/todo.md).
 
 The design and its reasoning are in [SPEC.md](SPEC.md), the hotel-theft data the requirements grew

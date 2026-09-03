@@ -33,6 +33,16 @@ mode = "on_lock"
 TOML
 fi
 
+# The token file for the clip sink. Created empty and 600 rather than filled in: the installer
+# has no business knowing a token, and the agent refuses to read this file if anyone else can.
+TG_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/camtrap/telegram.env"
+if [ ! -f "$TG_ENV" ]; then
+    mkdir -p "$(dirname "$TG_ENV")"
+    cp "$REPO/deploy/telegram.env.example" "$TG_ENV"
+    chmod 600 "$TG_ENV"
+    echo "== created $TG_ENV (600) — put a bot token in it, ideally a bot of its own"
+fi
+
 echo "== unit $UNIT_DIR/camtrap.service"
 cp "$REPO/deploy/systemd/camtrap.service" "$UNIT_DIR/camtrap.service"
 systemctl --user daemon-reload
@@ -41,7 +51,8 @@ cat <<'NEXT'
 
 Installed, not started. Before arming, in this order:
 
-  1. camtrap selftest          — camera, audio path, inhibitors, arming, receiver
+  0. ~/.config/camtrap/telegram.env — a bot token for the clips, in a bot of its own
+  1. camtrap selftest          — camera, audio path, inhibitors, receiver, encoder, chat
   2. camtrap siren-test        — is the siren audible from the built-in speakers?
   3. camtrap warn-test         — is the spoken warning intelligible in its language?
   4. camtrap calibrate --sec 60 — in the room, at the light level it will have

@@ -40,6 +40,8 @@ def build(
     arming=None,
     spool=None,
     camera=None,
+    clips=None,
+    uploader=None,
     wall: float | None = None,
 ) -> Heartbeat:
     missing = sounds.missing_sounds(cfg)
@@ -69,6 +71,29 @@ def build(
         "missing": ",".join(missing) if missing else None,
         "langs": ",".join(cfg.sound.warn_langs) or None,
     }
+    if clips is not None:
+        # Same reason `sound_ok` is here: a trap that silently cannot encode looks like it works.
+        # `clip_drops` is the number that says the machine could not keep up with the encoder, and
+        # a clip with holes in it is worth knowing about before the event rather than after.
+        ok, why = clips.available()
+        fields["video_ok"] = ok
+        fields["video_why"] = None if ok else why
+        fields["clip_segments"] = clips.status.segments_ready
+        fields["clip_mb"] = round(clips.status.bytes_ready / 1048576, 2)
+        fields["clip_drops"] = clips.status.frames_dropped
+    if uploader is not None:
+        # Any sink that can say whether it is ready, says so here. The Telegram sink can: a
+        # missing or group-readable token file means clips never reach the chat, and without this
+        # the only trace would be a line in the agent's own log — on the machine that is assumed
+        # to be walking out of the room.
+        for sink in getattr(uploader, "sinks", []):
+            checker = getattr(sink, "available", None)
+            if not callable(checker):
+                continue
+            ok, why = checker()
+            fields[f"{sink.name}_ok"] = ok
+            if not ok:
+                fields[f"{sink.name}_why"] = why
     if arming is not None:
         described = arming.describe(now=now)
         fields["armed"] = bool(described["armed"])

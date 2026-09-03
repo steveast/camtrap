@@ -23,11 +23,15 @@ def test_defaults_match_spec(cfg):
     assert cfg.detector.instant_area_pct == 7.0
     assert cfg.detector.min_motion_frames == 2
     assert cfg.detector.motion_window_frames == 5
-    # One frame at once, then one every 10 s while the event lasts. The boost that used to jump
-    # this throttle is off — 0 means disabled, and it is what turned the cadence into a burst.
-    assert cfg.event.snapshot_interval_sec == 30.0
+    # One frame at once, then one every 5 s while the event lasts — back to the original cadence
+    # on the owner's instruction, now that the poller streams the frames in groups instead of
+    # alerting once per event. The boost that used to jump this throttle stays off: 0 means
+    # disabled, and it is what turned the cadence into a burst.
+    assert cfg.event.snapshot_interval_sec == 5.0
     assert cfg.event.boost_area_pct == 0.0
-    assert cfg.event.max_frames_per_event == 60
+    # 20 minutes of a visit at that cadence. 60 was half an hour at 30 s and would truncate an
+    # ordinary cleaning visit at five minutes.
+    assert cfg.event.max_frames_per_event == 240
     assert cfg.spool.max_mb == 1024
     assert cfg.spool.retention_days == 14
     assert cfg.sound.siren_sec == 6.0

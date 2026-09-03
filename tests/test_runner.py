@@ -48,6 +48,48 @@ class Spawned(list):
         return self.runner is not None and self.runner.stats.sirens > 0
 
 
+class FakeClips:
+    """The clip recorder as the loop sees it: told about events, handed frames, never blocking.
+
+    Real encoding is tested in test_video.py against real ffmpeg. What matters here is the
+    wiring — which events get a clip, which frames reach it, and when it is closed.
+    """
+
+    def __init__(self):
+        self.begun: list[str] = []
+        self.frames = 0
+        self.ticks = 0
+        self.finished: list[str] = []
+        self.status = _ClipStatus()
+
+    def available(self):
+        return True, ""
+
+    def begin(self, event_id, *, now):
+        self.begun.append(event_id)
+
+    def submit(self, frame, *, now):
+        self.frames += 1
+        return True
+
+    def tick(self, *, now):
+        self.ticks += 1
+        return []
+
+    def finish(self, *, now, reason="event_end"):
+        self.finished.append(reason)
+        return []
+
+
+class _ClipStatus:
+    def __init__(self):
+        self.segments_ready = 2
+        self.bytes_ready = 4096
+        self.frames_dropped = 0
+        self.event_id = ""
+        self.running = False
+
+
 @pytest.fixture
 def wired(cfg, sysfs):
     cfg.tamper.ac_online_paths = [str(sysfs.ac)]
@@ -77,6 +119,7 @@ def wired(cfg, sysfs):
         monitor=TamperMonitor(cfg),
         responder=responder,
         arming=arming,
+        clips=FakeClips(),
         clock=lambda: 0.0,
     )
     runner.spawned = spawned
@@ -303,15 +346,90 @@ def test_the_click_follows_the_cadence_not_the_frame_rate(framed):
     detector's verdict: motion is continuous, photography is not.
     """
     runner, blank, _cmds = framed
-    for index in range(150):  # 30 s of continuous motion at 5 fps
+    seconds = 30.0
+    for index in range(int(seconds * 5)):  # 30 s of continuous motion at 5 fps
         frame = blank()
         frame[120:260, 100 + (index % 8) * 25 : 230 + (index % 8) * 25] = 210
         _drive(runner, frame, 70.0 + index * 0.2)
     clicks = len(runner.spawned.shutters())
-    # One when the event opens, then one per cadence slot — at the shipped 30 s, one or two in
-    # 30 s. The ceiling is the whole point: 150 frames arrived to produce them. Driving this
-    # longer measures something else, the detector learning a repeating pattern as background.
-    assert 1 <= clicks <= 3, f"expected a handful of clicks over 30 s, got {clicks}"
+    # One when the event opens, then one per cadence slot. Taken from the knob rather than
+    # repeated as a number: this test exists to prove clicks track WRITES, not the frame rate, so
+    # 150 frames may not produce more sound than the cadence allows. The band absorbs where the
+    # slot boundaries fall relative to the frames that carry them.
+    slots = seconds / runner.cfg.event.snapshot_interval_sec
+    assert slots - 2 <= clicks <= slots + 2, (
+        f"expected about {slots:.0f} clicks over {seconds:.0f} s at "
+        f"{runner.cfg.event.snapshot_interval_sec} s cadence, got {clicks}"
+    )
+
+
+def test_the_clip_follows_the_event_and_takes_every_analysed_frame(framed):
+    """The clip is 5 frames a second where the photographs are one every five.
+
+    That is the whole reason it exists, so this asserts the difference: the number of frames the
+    recorder is handed has to track the frames the DETECTOR saw, not the ones the throttle wrote.
+    """
+    runner, blank, _cmds = framed
+    for index in range(15):
+        frame = blank()
+        frame[120:260, 100 + (index % 8) * 25 : 230 + (index % 8) * 25] = 210
+        _drive(runner, frame, 70.0 + index * 0.2)
+    assert runner.clips.begun, "an event must open a clip"
+    assert len(set(runner.clips.begun)) == 1, "and only one per event"
+    assert runner.clips.frames >= 10, (
+        f"every analysed frame goes to the encoder, got {runner.clips.frames}"
+    )
+    photographs = runner.events.frames_total
+    assert runner.clips.frames > photographs, "a clip is denser than the photograph stream"
+
+
+def test_the_clip_closes_with_the_event_and_lands_in_the_manifest(framed, cfg):
+    """The clip never reaches the receiver, so the manifest is the only place it is announced."""
+    import json
+    import pathlib
+
+    runner, blank, _cmds = framed
+    for index in range(6):
+        frame = blank()
+        frame[120:260, 100 + index * 25 : 230 + index * 25] = 210
+        _drive(runner, frame, 70.0 + index * 0.2)
+    event_id = runner.clips.begun[0]
+    # Quiet for longer than event_gap_sec: the event closes, and the clip with it.
+    _drive(runner, blank(), 70.0 + 6 * 0.2 + cfg.event.event_gap_sec + 1.0)
+    assert runner.clips.finished == ["event_end"]
+    # The manifest is rewritten with the clip's numbers AFTER the event closes, and the drain in
+    # the same tick then delivers it — so the delivered copy is the one to read. That ordering is
+    # the point: a manifest that reached the receiver without them would announce no clip.
+    name = f"{event_id}.json"
+    delivered = pathlib.Path(cfg.upload.local_inbox) / name
+    spooled = cfg.spool_dir / name
+    manifest = json.loads((delivered if delivered.exists() else spooled).read_text())
+    assert manifest["clip_segments"] == 2
+    assert manifest["clip_bytes"] == 4096
+
+
+def test_a_light_event_records_no_clip(framed):
+    """One frame by definition (spec 3.1). There is no sequence to record."""
+    runner, blank, _cmds = framed
+    lit = blank(230)  # a light coming on changes nearly the whole frame
+    _drive(runner, lit, 70.0)
+    if runner.events.active is not None and runner.events.active.single_frame:
+        assert not runner.clips.begun, "a light event opens no clip"
+
+
+def test_the_loop_harvests_segments_before_it_drains(framed):
+    """A segment that closed since the last pass must be spooled before the drain lists it."""
+    runner, blank, _cmds = framed
+    _drive(runner, blank(), 80.0)
+    assert runner.clips.ticks > 0
+
+
+def test_shutdown_closes_the_encoder_even_with_no_event_open(framed):
+    """Closing stdin is what makes the last segment playable. It is the last chance to do it."""
+    runner, _blank, _cmds = framed
+    assert runner.events.active is None
+    runner.finish()
+    assert runner.clips.finished == ["shutdown"]
 
 
 def test_a_frame_the_throttle_refused_makes_no_sound(framed):

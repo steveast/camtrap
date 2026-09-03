@@ -5,6 +5,7 @@ poller asked it to send. Nothing here touches the network, the real VPS or Teleg
 """
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -102,7 +103,17 @@ esac
             return (self.outbox / name).read_text()
 
         def add_event(
-            self, event, kind, frames=3, signals=None, sound=None, mtime=1787000000, key=None
+            self,
+            event,
+            kind,
+            frames=3,
+            signals=None,
+            sound=None,
+            mtime=1787000000,
+            key=None,
+            prebuffer=None,
+            closed=None,
+            clip_segments=None,
         ):
             rows = "".join(
                 f"{event}_{index:03d}.jpg 1024 {mtime}.0\n" for index in range(max(1, frames))
@@ -114,9 +125,26 @@ esac
             sig = "" if not signals else '"signals":' + str(list(signals)).replace("'", '"') + ","
             snd = "" if not sound else f'"sound_stage":"{sound}",'
             key_field = f'"key_frame":"{key}",' if key else ""
-            (self.manifests / f"{event}.json").write_text(
-                f'{{"type":"{kind}",{sig}{snd}{key_field}"frames":{frames}}}'
+            # `prebuffer` says where the run-up ends and the event proper starts. None leaves it
+            # out entirely, which is what a manifest from an agent older than the field looks
+            # like — the poller has to cope with those too.
+            pre = "" if prebuffer is None else f'"prebuffer":{prebuffer},'
+            shut = "" if closed is None else f'"closed":{str(closed).lower()},'
+            clip = (
+                ""
+                if clip_segments is None
+                else f'"clip_segments":{clip_segments},"clip_bytes":{clip_segments * 1400000},'
             )
+            (self.manifests / f"{event}.json").write_text(
+                f'{{"type":"{kind}",{sig}{snd}{key_field}{pre}{shut}{clip}"frames":{frames}}}'
+            )
+
+        def marker(self, event):
+            return Path(self.env["CAMTRAP_STATE_DIR"]) / f"sent-{event}"
+
+        def album_names(self, name):
+            """The comma-separated names the fake receiver was asked to group."""
+            return self.body(name).splitlines()[0].split(",")
 
         def set_state(self, **fields):
             hb_age = fields.pop("hb_age", 10)
@@ -140,20 +168,234 @@ def test_a_motion_event_is_delivered_with_its_frames(rig):
     assert "frames: 4" in body
 
 
-def test_one_event_is_one_photograph(rig):
-    """`ALBUM_MAX = 1` since 2026-08-31: the key frame, and nothing beside it.
+def test_a_visit_is_delivered_frame_by_frame_in_one_group(rig):
+    """The reversal of 2026-08-31, on the owner's instruction: every frame of the visit arrives.
 
-    Six photographs of one visit is five more than the alert needs, and the whole event is on the
-    receiver and in the warehouse regardless. The album stays in the script behind the number.
+    One photograph per event was an answer to a chat full of near-identical albums, and it was the
+    wrong knob — it cut the record rather than the noise. The agent takes a frame every 5 s; those
+    frames now reach the chat, grouped into one message instead of dropped.
     """
+    rig.add_event("evt_20260903T111500Z", "motion", frames=9, prebuffer=5)
+    rig.run()
+    album = [name for name in rig.sent() if name.startswith("album-")]
+    assert album, f"the frames of the visit should travel as one group, got {rig.sent()}"
+    names = rig.album_names(album[0])
+    assert names == [
+        "evt_20260903T111500Z_005.jpg",
+        "evt_20260903T111500Z_006.jpg",
+        "evt_20260903T111500Z_007.jpg",
+        "evt_20260903T111500Z_008.jpg",
+    ], names
+    assert "movement in the room" in rig.body(album[0]), "the group carries the alert caption"
+
+
+def test_the_pre_buffer_is_not_part_of_the_stream(rig):
+    """The run-up is the room BEFORE anything happened, and it stays on the receiver.
+
+    Five near-identical photographs of an empty room per event is not what "show me the whole
+    visit" meant; the manifest's `prebuffer` is what tells the poller where the visit starts.
+    """
+    rig.add_event("evt_20260903T112000Z", "motion", frames=8, prebuffer=5)
+    rig.run()
+    sent = "".join(rig.body(name) for name in rig.deliveries())
+    for index in range(5):
+        assert f"_{index:03d}.jpg" not in sent, f"_{index:03d} is the empty room before the visit"
+
+
+def test_later_frames_of_an_open_event_arrive_as_a_follow_up(rig):
+    """A visit that lasts keeps delivering. The alert is not the end of the story."""
+    event = "evt_20260903T113000Z"
+    fresh = int(time.time())
+    rig.add_event(event, "motion", frames=8, prebuffer=5, mtime=fresh)
+    rig.run()
+    first = rig.deliveries()
+    assert first, "the visit must be delivered"
+
+    rig.listing.write_text("")  # re-list with the frames that arrived since
+    rig.add_event(event, "motion", frames=18, prebuffer=5, mtime=fresh)
+    rig.run()
+    later = [name for name in rig.deliveries() if name not in first]
+    assert later, "frames taken after the alert must still reach the chat"
+    body = "".join(rig.body(name) for name in later)
+    assert "continues" in body, body
+    assert "_008.jpg" in body, "the follow-up starts where the alert stopped"
+    assert "_007.jpg" not in rig.album_names(later[0]), "already delivered, not sent twice"
+    assert "_017.jpg" in body, "the newest frame is what the follow-up is for"
+
+
+def test_a_follow_up_waits_until_it_can_fill_a_group(rig):
+    """Passes run every 15 s and the cadence writes a frame every 5 s.
+
+    Sending each pass's three frames as its own message is four messages a minute for one visit —
+    the complaint that cut the cadence from 5 s to 30 s in the first place. The frames are not
+    dropped, they are grouped: what is held is stated in the log and goes out with the next group.
+    The ALERT never waits; this applies to the follow-ups behind it.
+    """
+    event = "evt_20260903T120000Z"
+    fresh = int(time.time())
+    rig.add_event(event, "motion", frames=8, prebuffer=5, mtime=fresh)
+    rig.run()
+    first = rig.deliveries()
+    assert first, "the alert goes with whatever has arrived"
+
+    rig.listing.write_text("")
+    rig.add_event(event, "motion", frames=11, prebuffer=5, mtime=fresh)
+    rig.run()
+    assert rig.deliveries() == first, "three more frames is not worth a message of its own"
+
+    rig.listing.write_text("")
+    rig.add_event(event, "motion", frames=18, prebuffer=5, mtime=fresh)
+    rig.run()
+    later = [name for name in rig.deliveries() if name not in first]
+    assert later, "once the group can be filled it goes"
+    names = rig.album_names(later[0])
+    assert len(names) == 10, names
+    assert names[0].endswith("_008.jpg"), "and it starts where the alert stopped — nothing skipped"
+
+
+def test_a_closed_visit_flushes_its_tail(rig):
+    """The last frames of a visit are few by definition and must not wait for a tenth."""
+    event = "evt_20260903T121000Z"
+    fresh = int(time.time())
+    rig.add_event(event, "motion", frames=8, prebuffer=5, mtime=fresh, closed=False)
+    rig.run()
+    first = rig.deliveries()
+
+    rig.listing.write_text("")
+    rig.add_event(event, "motion", frames=11, prebuffer=5, mtime=fresh, closed=True)
+    rig.run()
+    later = [name for name in rig.deliveries() if name not in first]
+    assert later, "a closed event sends what is left, however little"
+
+
+def test_a_visit_that_never_closes_still_flushes_its_tail(rig):
+    """The agent was carried off mid-event, so `closed` will never arrive.
+
+    Without the tail timer those frames would sit on the receiver waiting for a group that cannot
+    be completed — and they are the most interesting frames in the spool, because whatever the
+    agent was watching is what stopped it.
+    """
+    event = "evt_20260903T122000Z"
+    fresh = int(time.time())
+    rig.add_event(event, "motion", frames=8, prebuffer=5, mtime=fresh)
+    rig.run()
+    first = rig.deliveries()
+
+    rig.listing.write_text("")  # nothing new for longer than STREAM_TAIL_SEC
+    rig.add_event(event, "motion", frames=11, prebuffer=5, mtime=fresh - 600)
+    rig.run()
+    later = [name for name in rig.deliveries() if name not in first]
+    assert later, "a visit that stopped producing frames must not strand its tail"
+
+
+def test_the_alert_says_a_clip_exists(rig):
+    """The clip is in the warehouse and nowhere near the chat, so the alert has to mention it.
+
+    A photograph that arrives without saying there is a minute of video beside it is a photograph
+    nobody thinks to look behind.
+    """
+    rig.add_event("evt_20260903T130000Z", "motion", frames=8, prebuffer=5, clip_segments=4)
+    rig.run()
+    body = "".join(rig.body(name) for name in rig.deliveries())
+    assert "clip: 4 segment(s)" in body, body
+    assert "warehouse" in body
+
+
+def test_no_clip_means_no_clip_line(rig):
+    """An event with no clip must not claim one — including a manifest from before clips existed."""
+    rig.add_event("evt_20260903T131000Z", "motion", frames=8, prebuffer=5)
+    rig.run()
+    body = "".join(rig.body(name) for name in rig.deliveries())
+    assert "clip:" not in body, body
+
+
+def test_a_frame_is_delivered_exactly_once(rig):
+    """Nothing new on the receiver means nothing new in the chat — the flood guard."""
+    rig.add_event("evt_20260903T114000Z", "motion", frames=8, prebuffer=5)
+    rig.run()
+    first = rig.sent()
+    rig.run()
+    assert rig.sent() == first, "a pass that finds no new frame must send nothing"
+
+
+def test_a_group_is_capped_at_telegrams_ceiling(rig):
+    """sendMediaGroup takes 2-10 items, and a long visit has more frames than that."""
+    rig.add_event("evt_20260903T115000Z", "motion", frames=40, prebuffer=5)
+    rig.run()
+    albums = [name for name in rig.sent() if name.startswith("album-")]
+    assert albums, rig.sent()
+    for name in albums:
+        assert len(rig.album_names(name)) <= 10, rig.album_names(name)
+    # STREAM_BATCHES_MAX bounds the pass, so one long visit cannot spend the whole tick — and the
+    # marker records how far it got, so the next pass carries on rather than starting over.
+    assert len(albums) == 3, f"three groups per pass, got {len(albums)}"
+    assert rig.marker("evt_20260903T115000Z").read_text().split()[1] == "34"
+
+
+def test_a_single_new_frame_goes_as_a_photo(rig):
+    """A group of one is refused by Telegram, so one frame travels as a photo."""
+    rig.add_event("evt_20260903T116000Z", "motion", frames=6, prebuffer=5)
+    rig.run()
+    assert rig.sent() == ["photo-evt_20260903T116000Z_005.jpg.txt"], rig.sent()
+
+
+def test_a_marker_from_before_the_stream_is_adopted_not_replayed(rig):
+    """Deploying this must not empty yesterday afternoon into the chat.
+
+    The old marker recorded only WHEN an event was alerted, never which frames went. Reading a
+    missing index as "none delivered" would re-send every frame still on the receiver — days of
+    them, all at once, which is how a person learns to mute the alerts entirely.
+    """
+    event = "evt_20260903T117000Z"
+    rig.add_event(event, "motion", frames=20, prebuffer=5)
+    rig.marker(event).parent.mkdir(parents=True, exist_ok=True)
+    rig.marker(event).write_text("1787000000\n")  # the old one-field format
+    rig.run()
+    assert not rig.deliveries(), f"nothing should be replayed, got {rig.sent()}"
+    assert rig.marker(event).read_text().split()[1] == "19", "and it adopts what is there now"
+
+
+def test_stream_off_restores_one_photograph_per_event(rig):
+    """`STREAM=0` is the revert path, and it keeps the behaviour it replaced.
+
+    `ALBUM_MAX = 1` since 2026-08-31: the key frame, and nothing beside it.
+    """
+    rig.env["STREAM"] = "0"
     rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
     rig.run()
     assert rig.sent() == ["photo-evt_20260820T111500Z_005.jpg.txt"], rig.sent()
     assert not [name for name in rig.sent() if name.startswith("album-")]
 
 
+def test_a_failed_group_does_not_advance_the_marker(rig):
+    """State mutates only after a successful send — the discipline the whole script is built on."""
+    event = "evt_20260903T118000Z"
+    rig.add_event(event, "motion", frames=9, prebuffer=5)
+    (rig.tmp / "fail-send").write_text("x")
+    rig.run()
+    assert not rig.marker(event).exists(), "a refused group is a retry, not a delivered frame"
+    (rig.tmp / "fail-send").unlink()
+    rig.run()
+    assert rig.marker(event).read_text().split()[1] == "8"
+
+
+def test_the_hourly_cap_counts_visits_not_photographs(rig):
+    """One long visit must not exhaust a cap that is meant to limit ALERTS."""
+    rig.env["MOTION_ALERTS_PER_HOUR"] = "1"
+    event = "evt_20260903T119000Z"
+    rig.add_event(event, "motion", frames=8, prebuffer=5)
+    rig.run()
+    assert rig.deliveries(), "the first visit is under the cap"
+    rig.listing.write_text("")
+    rig.add_event(event, "motion", frames=14, prebuffer=5)
+    rig.run()
+    body = "".join(rig.body(name) for name in rig.deliveries())
+    assert "_013.jpg" in body, "the same visit continuing is not a second alert"
+
+
 def test_the_key_frame_leads_the_album(rig):
     """The key frame leads, then the newest frames. `_000` is the room before anything happened."""
+    rig.env["STREAM"] = "0"  # the lead-and-album shape, which the stream replaced
     rig.env["ALBUM_MAX"] = "6"  # the album is off by default; this is the knob it lives behind
     rig.add_event("evt_20260820T111500Z", "motion", frames=8, key="evt_20260820T111500Z_005.jpg")
     rig.run()

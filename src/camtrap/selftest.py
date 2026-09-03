@@ -44,7 +44,8 @@ def check_tools() -> list[Check]:
         ("pactl", "forces the sink, profile, mute and volume"),
         ("loginctl", "reads the lock state and locks the session on tamper"),
         ("systemd-inhibit", "keeps a closed lid from suspending the machine"),
-        ("ffmpeg", "generates the siren"),
+        ("ffmpeg", "generates the siren and encodes the clips"),
+        ("curl", "sends a clip to the chat from this laptop"),
         ("espeak-ng", "generates the spoken warning"),
     ):
         found = _which(name)
@@ -192,6 +193,60 @@ def check_spool(cfg: Config) -> Check:
     return Check("spool", OK, f"{depth} files, {spool.total_bytes() / 1048576:.1f} MB")
 
 
+def check_video(cfg: Config) -> Check:
+    """Prove the encoder actually encodes, rather than that ffmpeg is on the PATH.
+
+    The audio probe plays a real burst through the real speakers for the same reason: walking away
+    believing in a trap that cannot record is worse than knowing it is broken. This runs a handful
+    of synthetic frames through the real argv and looks for a playable segment, which is what
+    catches a build of ffmpeg without libx264 — where every check short of encoding says yes.
+
+    A failure here is a WARNING, not a blocker. The clip is the record; the photographs are the
+    alert and the evidence, and they do not go through this path at all.
+    """
+    import copy
+    import tempfile
+
+    import numpy as np
+
+    from .video import ClipRecorder
+
+    if not cfg.video.enabled:
+        return Check("video", WARN, "disabled", "set video.enabled = true for clips")
+    probe_cfg = copy.deepcopy(cfg)
+    with tempfile.TemporaryDirectory(prefix="camtrap-video-") as tmp:
+        probe_cfg.state_dir = tmp
+        probe_cfg.video.segment_sec = 0.4
+        recorder = ClipRecorder(probe_cfg)
+        ok, why = recorder.available()
+        if not ok:
+            return Check("video", WARN, why, "no clips will be recorded")
+        recorder.begin("evt_probe", now=0.0)
+        for index in range(6):
+            frame = np.full((180, 320, 3), 30 + index * 20, dtype=np.uint8)
+            recorder.submit(frame, now=index * 0.2)
+        segments = recorder.finish(now=2.0)
+        if not segments:
+            return Check(
+                "video",
+                WARN,
+                "encoder produced nothing",
+                "check `ffmpeg -encoders | grep libx264`",
+            )
+    shape = f"{int(cfg.video.clip_sec)}s clips in {int(cfg.video.segment_sec)}s segments"
+    detail = f"h264 {shape} -> {','.join(cfg.video.sinks)}"
+    if "telegram" in cfg.video.sinks:
+        from .uploader import TelegramSink
+
+        ok, why = TelegramSink(cfg).available()
+        if not ok:
+            # A warning, not a failure: the segments still reach the warehouse. But it has to be
+            # said out loud, because "the clips silently never reached the chat" is exactly the
+            # kind of unreadiness this whole check exists to surface before the event.
+            return Check("video", WARN, f"{detail}; chat unavailable: {why}", "see docs/runbook.md")
+    return Check("video", OK, detail)
+
+
 def run(cfg: Config) -> tuple[list[Check], int]:
     checks: list[Check] = []
     checks.extend(check_tools())
@@ -202,6 +257,7 @@ def run(cfg: Config) -> tuple[list[Check], int]:
     checks.append(check_sysrq())
     checks.append(check_inhibit())
     checks.append(check_receiver(cfg))
+    checks.append(check_video(cfg))
     checks.append(check_spool(cfg))
     checks.append(Check("mode", OK, read_mode(cfg.root).name))
     failures = sum(1 for check in checks if check.verdict == FAIL)
